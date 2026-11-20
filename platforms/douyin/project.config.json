@@ -1,0 +1,5 @@
+{
+  "description": "金缮夜馆 · 抖音小游戏",
+  "projectname": "jinyao-douyin",
+  "setting": { "es6": true, "minified": true }
+}

@@ -1,0 +1,9 @@
+© 2014-2021 Adobe (http://www.adobe.com/).
+Jinyao UI is a subset converted to TrueType from Noto Sans CJK SC.
+https://github.com/notofonts/noto-cjk
+
+
+Files: debian/*
+Copyright: 2013, Vasudev Kamath <kamathvasudev@gmail.com>
+          2013-2015, Jonas Smedegaard <dr@jones.dk>
+          2015-2022, ChangZhuo Chen (陳昌倬) <czchen@debian.org>

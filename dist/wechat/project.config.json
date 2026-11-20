@@ -1,0 +1,10 @@
+{
+  "description": "金缮夜馆 · 微信小游戏",
+  "projectname": "jinyao-wechat",
+  "compileType": "game",
+  "appid": "touristappid",
+  "setting": {
+    "es6": true,
+    "minified": true
+  }
+}
