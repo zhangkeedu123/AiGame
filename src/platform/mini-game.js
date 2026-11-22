@@ -79,7 +79,8 @@ function createPlatform(api, adUnitId) {
           fs = fs || optional(api, 'getFileSystemManager');
           if (!fs) { failure(path); return; }
           const base64 = fs.readFileSync(path, 'base64');
-          attempt('data:image/png;base64,' + base64);
+          const format = /\.jpe?g$/i.test(path) ? 'jpeg' : 'png';
+          attempt('data:image/' + format + ';base64,' + base64);
         } catch (_) { failure(path); }
       }
       if (typeof image.addEventListener === 'function') {

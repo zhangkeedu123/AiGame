@@ -12,6 +12,7 @@ const HINT_OUTLINE = [['rgba(42,52,41,0.58)', 3.4], ['#e8c784', 1.9]];
 const SELECTION_OUTLINE = [['rgba(38,74,62,0.52)', 2.6], ['#d8f1e5', 1.35]];
 const OPENING_DURATION = 1320;
 const BREAK_AT = 440;
+const HOME_ART = { image: 'assets/home-shanshui.jpg' };
 
 function box(x, y, w, h) { return { x, y, w, h }; }
 function contains(r, x, y) {
@@ -316,87 +317,105 @@ function poster(ctx, level, image, target, repaired) {
   ctx.restore();
 }
 
-function homeBackground(ctx, width, height) {
-  const glaze = ctx.createLinearGradient(0, 0, width * 0.7, height);
-  glaze.addColorStop(0, '#284942');
-  glaze.addColorStop(0.52, '#47675b');
-  glaze.addColorStop(1, '#819481');
-  ctx.fillStyle = glaze;
+function homeBackground(ctx, width, height, image) {
+  ctx.fillStyle = '#f4ebd8';
   ctx.fillRect(0, 0, width, height);
-
-  ctx.save();
-  ctx.scale(width / 390, height / 844);
-  ctx.beginPath();
-  ctx.arc(311, 106, 53, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(233,211,158,0.31)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  for (const [rise, color] of [
-    [0, 'rgba(211,221,197,0.17)'],
-    [53, 'rgba(39,74,62,0.30)'],
-    [104, 'rgba(22,54,47,0.42)'],
-  ]) {
-    ctx.beginPath();
-    ctx.moveTo(0, 649 + rise);
-    ctx.quadraticCurveTo(35, 600 + rise, 74, 633 + rise);
-    ctx.quadraticCurveTo(127, 691 + rise, 170, 643 + rise);
-    ctx.quadraticCurveTo(230, 567 + rise, 285, 655 + rise);
-    ctx.quadraticCurveTo(330, 690 + rise, 390, 641 + rise);
-    ctx.lineTo(390, 844);
-    ctx.lineTo(0, 844);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+  if (image && image.width && image.height) {
+    const cover = Math.max(width / image.width, height / image.height);
+    const sourceWidth = width / cover, sourceHeight = height / cover;
+    ctx.drawImage(image, (image.width - sourceWidth) / 2, (image.height - sourceHeight) / 2,
+      sourceWidth, sourceHeight, 0, 0, width, height);
   }
+  const mist = ctx.createLinearGradient(0, height * 0.32, 0, height);
+  mist.addColorStop(0, 'rgba(250,240,220,0)');
+  mist.addColorStop(0.5, 'rgba(250,240,220,0.78)');
+  mist.addColorStop(0.8, 'rgba(250,240,220,0.61)');
+  mist.addColorStop(1, 'rgba(250,240,220,0.06)');
+  ctx.fillStyle = mist;
+  ctx.fillRect(0, 0, width, height);
+}
+
+function homeIcon(ctx, kind, x, y, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.beginPath();
+  if (kind === 'daily') {
+    ctx.moveTo(-2, -7); ctx.lineTo(-2, -3);
+    ctx.moveTo(3, -7); ctx.lineTo(3, -3);
+    ctx.moveTo(-6, -1); ctx.lineTo(7, -1);
+    ctx.moveTo(-6, -5); ctx.lineTo(7, -5); ctx.lineTo(7, 7); ctx.lineTo(-6, 7); ctx.closePath();
+  } else if (kind === 'ranking') {
+    ctx.moveTo(-8, 7); ctx.lineTo(-8, 1); ctx.lineTo(-3, 1);
+    ctx.lineTo(-3, -6); ctx.lineTo(3, -6); ctx.lineTo(3, 3);
+    ctx.lineTo(8, 3); ctx.lineTo(8, 7); ctx.closePath();
+  } else if (kind === 'share') {
+    ctx.moveTo(-8, 5);
+    ctx.quadraticCurveTo(-6, -3, 2, -3);
+    ctx.lineTo(2, -7); ctx.lineTo(9, -1); ctx.lineTo(2, 5); ctx.lineTo(2, 1);
+    ctx.quadraticCurveTo(-5, 1, -8, 5);
+  } else {
+    ctx.moveTo(-3, -4); ctx.lineTo(2, 0); ctx.lineTo(-3, 4);
+  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1.35;
+  ctx.strokeStyle = color;
+  ctx.stroke();
   ctx.restore();
 }
 
 function drawHome(ctx, layout, app) {
   const { width, height, top, bottom, w } = layout;
   const hits = [];
-  const ink = '#153e36', brass = '#b99b67';
-  const scale = Math.min(w / 360, (height - top - bottom) / 594);
-  const left = (width - 360 * scale) / 2;
-  const originY = top + (height - top - bottom - 594 * scale) * 0.42;
-  homeBackground(ctx, width, height);
+  const ink = '#254a40', brass = '#b39262';
+  const available = height - top - bottom;
+  const scale = Math.min(1.1, w / 330, available / 416);
+  const left = (width - 330 * scale) / 2;
+  const originY = top + (available - 380 * scale) * 0.85;
+  homeBackground(ctx, width, height, app.imageFor(HOME_ART));
   ctx.save();
   ctx.translate(left, originY);
   ctx.scale(scale, scale);
 
-  const card = (id, x, y, w, h, fill) => {
-    rounded(ctx, box(x, y, w, h), 7, fill, brass);
+  const card = (id, x, y, w, h, radius, fill, stroke) => {
+    rounded(ctx, box(x, y, w, h), radius, fill, stroke);
     hits.push({ id, rect: box(left + x * scale, originY + y * scale, w * scale, h * scale) });
   };
 
-  text(ctx, '选择模式', 3, 43, { color: '#f7ead0', size: 35, bold: true, serif: true });
+  text(ctx, '选择模式', 165, 26, { color: ink, align: 'center', size: 27, bold: true, serif: true });
   ctx.fillStyle = brass;
-  ctx.fillRect(3, 77, 354, 1);
+  ctx.fillRect(63, 26, 37, 1);
+  ctx.fillRect(230, 26, 37, 1);
 
   const details = [
-    ['normal', '10 关 · 每关多 5 片', '#1e463c', '#d5c4a0'],
-    ['hard', '20 关 · 20 片起 · 可旋转', '#263d42', '#ced7d7'],
-    ['extreme', '无限关卡 · 可旋转 · 干扰碎片', '#523b37', '#e2c0ac'],
+    ['normal', '10 关 · 每关多 5 片', '#2e6b59', '#205344'],
+    ['hard', '20 关 · 20 片起 · 可旋转', '#3c657b', '#2c5269'],
+    ['extreme', '无限关卡 · 可旋转 · 干扰碎片', '#9c6053', '#7a453d'],
   ];
-  details.forEach(([mode, detail, fill, accent], i) => {
-    const y = 96 + i * 126;
-    card('mode-' + mode, 0, y, 360, 112, fill);
-    rounded(ctx, box(7, y + 7, 346, 98), 4, null, 'rgba(239,214,163,0.28)');
-    const level = app.modeBooks[mode]?.current;
-    const progress = (app.modeBooks[mode]?.wins || []).length;
-    const hint = progress === app.modes[mode].limit ? '已通关' :
-      level === undefined ? '开始挑战' : '继续第 ' + (level + 1) + ' 关';
-    text(ctx, app.modes[mode].name, 22, y + 31, { size: 25, bold: true, serif: true });
-    text(ctx, detail, 23, y + 63, { size: 14, color: accent });
-    text(ctx, hint, 23, y + 89, { size: 13, color: accent });
-    text(ctx, '›', 329, y + 55, { size: 30, color: '#f3d297', align: 'center' });
+  details.forEach(([mode, detail, light, dark], i) => {
+    const y = 57 + i * 69;
+    const glaze = ctx.createLinearGradient(0, y, 0, y + 57);
+    glaze.addColorStop(0, light);
+    glaze.addColorStop(1, dark);
+    rounded(ctx, box(45, y + 3, 240, 57), 14, 'rgba(67,57,37,0.19)');
+    card('mode-' + mode, 45, y, 240, 57, 14, glaze, '#bd9a63');
+    rounded(ctx, box(49, y + 4, 232, 49), 10, null, 'rgba(247,222,167,0.37)');
+    const book = app.modeBooks[mode];
+    const progress = book?.wins?.length;
+    const subtitle = progress === app.modes[mode].limit ? '已通关' :
+      book?.current === undefined ? detail : '继续第 ' + (book.current + 1) + ' 关 · ' + detail.split(' · ')[0];
+    text(ctx, app.modes[mode].name, 165, y + 20, { align: 'center', size: 20, bold: true, color: '#fff2d2' });
+    text(ctx, subtitle, 165, y + 40, { align: 'center', size: 11.5, color: '#f1ddaf' });
+    homeIcon(ctx, 'chevron', 266, y + 28, '#f0d39d');
   });
 
   [['daily', '每日一瓷'], ['ranking', '排行榜'], ['share', '分享']].forEach(([id, label], i) => {
-    card(id, i * 122, 482, 116, 50, '#e9ddc1');
-    text(ctx, label, i * 122 + 58, 507, { align: 'center', size: 15, color: ink, bold: true });
+    const x = 16 + i * 101;
+    card(id, x, 283, 96, 43, 10, 'rgba(255,248,228,0.91)', 'rgba(135,116,74,0.57)');
+    homeIcon(ctx, id, x + 17, 304, ink);
+    text(ctx, label, x + 31, 305, { size: 13, color: ink, bold: true });
   });
-  if (app.homeNotice) text(ctx, app.homeNotice, 180, 555, { align: 'center', size: 14, color: '#fff2d6', width: 350 });
+  if (app.homeNotice) text(ctx, app.homeNotice, 165, 349, { align: 'center', size: 13, color: ink, width: 330 });
   ctx.restore();
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }

@@ -131,10 +131,11 @@ async function mockRuntime(output, platform) {
     }),
     createImage() {
       const listeners = {};
-      const img = {};
+      const img = { width: 800, height: 1761 };
       if (platform === 'douyin') img.addEventListener = (name, listener) => { listeners[name] = listener; };
       Object.defineProperty(img, 'src', { set(src) {
-        const isData = src.startsWith('data:image/png;base64,');
+        const isData = /^data:image\/(?:png|jpeg);base64,/.test(src);
+        if (isData) assert.ok(/^data:image\/(?:png;base64,iVBOR|jpeg;base64,\/9j\/)/.test(src));
         const exists = isData || fs.existsSync(path.join(output, src));
         const event = exists && (platform === 'wechat' || isData) ? 'load' : 'error';
         queue.push(() => (listeners[event] || img['on' + event])());
@@ -215,16 +216,16 @@ async function mockRuntime(output, platform) {
     require(path.join(output, 'game.js'));
     flush();
     assert.equal(canvas.width, 1170);
-    assert.equal(imagesDrawn, 0);
+    assert.ok(imagesDrawn > 0);
     assert.ok(fontLoaded && ctx.font.includes('Jinyao UI'));
-    assert.equal(imageFallback, 0);
+    assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
     tapLabel('分享');
     assert.equal(share.title, '金缮夜馆');
     tapLabel('排行榜');
     assert.ok(labels.some(item => item.label === '本机 · 每日一瓷最快五次'));
     tapLabel('挑战每日一瓷');
     assert.ok(imagesDrawn > 0);
-    assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
+    assert.equal(imageFallback, platform === 'wechat' ? 0 : 2);
     const oldCampaign = stored;
     const dailyGroup = { x: -25, y: 130, turn: 0 };
     strokes.length = 0;
