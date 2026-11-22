@@ -184,10 +184,11 @@ class Puzzle {
     this.book.current = this.index;
     this.level = this.mode ? modeLevel(this.mode, this.index) : levels[this.index];
     const saved = this.book.games[this.index];
-    this.state = !reset && validGame(saved, this.level) ? {
+    this.newBoard = Boolean(reset) || !validGame(saved, this.level);
+    this.state = this.newBoard ? makeGame(this.level, this.random) : {
       groups: saved.groups,
       remaining: Number.isFinite(saved.remaining) ? Math.max(0, saved.remaining) : this.level.duration,
-    } : makeGame(this.level, this.random);
+    };
     if (this.mode && this.limit === Infinity) {
       for (const key of Object.keys(this.book.games)) {
         if (Number(key) !== this.index) delete this.book.games[key];

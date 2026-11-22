@@ -2,7 +2,7 @@
 
 const levels = require('./core/levels.js');
 const { Puzzle, groupBounds } = require('./core/puzzle.js');
-const { contains, computeLayout, draw } = require('./core/view.js');
+const { contains, computeLayout, draw, OPENING_DURATION } = require('./core/view.js');
 const { dailyEdition, dailyRandom, formatTime } = require('./core/daily.js');
 const { modes } = require('./core/modes.js');
 
@@ -37,6 +37,7 @@ class Game {
     this.hits = [];
     this.active = null;
     this.modal = null;
+    this.opening = null;
     this.pendingFrame = false;
     this.resize();
     platform.onInput((kind, touch) => this.input(kind, touch));
@@ -49,6 +50,7 @@ class Game {
     });
     platform.onHide(() => {
       this.visible = false;
+      if (this.opening) this.opening.since = null;
       this.pauseClock();
       this.cancel();
       this.save();
@@ -87,12 +89,30 @@ class Game {
     this.pendingFrame = true;
     this.platform.frame(() => {
       this.pendingFrame = false;
+      const animate = this.advanceOpening();
       this.ctx.save();
       try {
         this.ctx.scale(this.pixelX, this.pixelY);
         this.hits = draw(this.ctx, this.layout, this);
       } finally { this.ctx.restore(); }
+      if (animate) this.renderSoon();
     });
+  }
+
+  prepareBoard() {
+    this.opening = this.puzzle.newBoard ? { elapsed: 0, since: null } : null;
+    this.resumeClock();
+  }
+
+  advanceOpening() {
+    if (!this.opening || !this.visible || !this.imageFor(this.puzzle.level)) return false;
+    const now = Date.now();
+    if (this.opening.since !== null) this.opening.elapsed += Math.max(0, now - this.opening.since);
+    this.opening.since = now;
+    if (this.opening.elapsed < OPENING_DURATION) return true;
+    this.opening = null;
+    this.resumeClock();
+    return false;
   }
 
   imageFor(level) {
@@ -156,7 +176,7 @@ class Game {
   }
 
   resumeClock() {
-    if (!this.visible || !this.puzzle || this.screen === 'home' || this.puzzle.phase === 'stored') return;
+    if (!this.visible || this.opening || !this.puzzle || this.screen === 'home' || this.puzzle.phase === 'stored') return;
     if (this.puzzle.state.remaining === 0) {
       if (this.modal !== 'timeout') this.adNotice = '';
       this.modal = 'timeout';
@@ -221,7 +241,7 @@ class Game {
     this.shareNotice = '';
     if (this.puzzle.phase === 'stored') this.recordDaily();
     this.defaultMessage();
-    this.resumeClock();
+    this.prepareBoard();
     this.save();
   }
 
@@ -287,7 +307,7 @@ class Game {
     const button = this.buttonAt(touch);
     const active = { id: touch.id, first: touch, last: touch, button, group: null, moved: false };
     this.active = active;
-    if (button || this.screen === 'home' || this.modal || !contains(this.layout.field, touch.x, touch.y)) return;
+    if (button || this.screen === 'home' || this.opening || this.modal || !contains(this.layout.field, touch.x, touch.y)) return;
     if (this.puzzle.phase !== 'fit' || !this.imageFor(this.puzzle.level)) return;
     const point = this.world(touch);
     const group = this.puzzle.hit(point.x, point.y);
@@ -354,7 +374,7 @@ class Game {
     this.puzzle.load(index, restart);
     this.modal = null;
     this.defaultMessage();
-    this.resumeClock();
+    this.prepareBoard();
     this.save();
   }
 
@@ -365,6 +385,7 @@ class Game {
       this.save();
       this.screen = 'home';
       this.puzzle = null;
+      this.opening = null;
       this.edition = dailyEdition(Date.now(), levels.length);
       this.dailySince = null;
       this.homeNotice = '';
@@ -375,7 +396,7 @@ class Game {
       this.screen = 'campaign';
       this.modal = null;
       this.defaultMessage();
-      this.resumeClock();
+      this.prepareBoard();
       this.save();
     } else if (id === 'daily') {
       this.edition = dailyEdition(Date.now(), levels.length);

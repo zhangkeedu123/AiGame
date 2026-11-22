@@ -1,6 +1,6 @@
 'use strict';
 
-const { WIDTH, HEIGHT, SCALE } = require('./puzzle.js');
+const { WIDTH, HEIGHT, SCALE, rotatePoint } = require('./puzzle.js');
 const { formatTime } = require('./daily.js');
 
 let fontFamily = '';
@@ -10,6 +10,8 @@ const COLORS = {
 };
 const HINT_OUTLINE = [['rgba(42,52,41,0.58)', 3.4], ['#e8c784', 1.9]];
 const SELECTION_OUTLINE = [['rgba(38,74,62,0.52)', 2.6], ['#d8f1e5', 1.35]];
+const OPENING_DURATION = 1320;
+const BREAK_AT = 440;
 
 function box(x, y, w, h) { return { x, y, w, h }; }
 function contains(r, x, y) {
@@ -183,7 +185,59 @@ function groupOutline(ctx, level, group, displayScale, strokes) {
   ctx.restore();
 }
 
-function deskDraw(ctx, layout, puzzle, image, decoyImage) {
+function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
+  const level = puzzle.level;
+  const originX = (WIDTH - 400 * SCALE) / 2;
+  const originY = (HEIGHT - 450 * SCALE) / 2;
+  if (elapsed < BREAK_AT) {
+    const lift = 24 * (1 - Math.min(1, elapsed / 275)) ** 2;
+    ctx.save();
+    ctx.translate(originX, originY - lift);
+    ctx.scale(SCALE, SCALE);
+    ctx.shadowColor = 'rgba(30,57,43,0.35)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 5 + lift * 0.28;
+    atlasDraw(ctx, image, level.poster, box(0, 0, 400, 450));
+    if (elapsed > 270) {
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowColor = 'transparent';
+      ctx.globalAlpha = (elapsed - 270) / (BREAK_AT - 270);
+      seams(ctx, level, { ids: level.shards.map((_, id) => id) }, false);
+    }
+    ctx.restore();
+    return;
+  }
+
+  const progress = (elapsed - BREAK_AT) / (OPENING_DURATION - BREAK_AT);
+  const travel = 1 - (1 - progress) ** 3;
+  const kick = Math.sin(Math.PI * progress);
+  for (const group of puzzle.state.groups) {
+    const id = group.ids[0];
+    const shard = level.shards[id];
+    const [dx, dy] = rotatePoint(shard.cx * SCALE, shard.cy * SCALE, group.turn);
+    const targetX = group.x + dx, targetY = group.y + dy;
+    const decoy = level.decoyArt && id >= level.realCount;
+    ctx.save();
+    if (decoy) {
+      const arrival = Math.max(0, (progress - 0.32) / 0.68);
+      ctx.globalAlpha = arrival;
+      ctx.translate(targetX, targetY + 44 * (1 - arrival) ** 2);
+    } else {
+      const startX = originX + shard.cx * SCALE, startY = originY + shard.cy * SCALE;
+      ctx.translate(startX + (targetX - startX) * travel + kick * (shard.cx - 200) * 0.12,
+        startY + (targetY - startY) * travel - kick * (16 + id % 4 * 3));
+    }
+    const turn = group.turn === 3 ? -1 : group.turn;
+    ctx.rotate(turn * Math.PI / 2 * (decoy ? 1 : travel) + (id % 2 ? 0.16 : -0.16) * kick);
+    ctx.scale(SCALE, SCALE);
+    ctx.translate(-shard.cx, -shard.cy);
+    drawShard(ctx, level, id, image, decoyImage);
+    ctx.restore();
+  }
+}
+
+function deskDraw(ctx, layout, puzzle, image, decoyImage, opening) {
   rounded(ctx, layout.desk, 14, COLORS.cloth, '#b8c4af');
   const desk = layout.desk;
   rounded(ctx, box(desk.x + 5, desk.y + 5, desk.w - 10, desk.h - 10), 10, null, '#c9d2bd');
@@ -193,6 +247,11 @@ function deskDraw(ctx, layout, puzzle, image, decoyImage) {
   ctx.clip();
   ctx.translate(layout.field.x, layout.field.y);
   ctx.scale(layout.scale, layout.scale);
+  if (opening) {
+    openingDraw(ctx, puzzle, image, decoyImage, opening.elapsed);
+    ctx.restore();
+    return;
+  }
   const intact = puzzle.phase !== 'fit';
   for (const group of puzzle.state.groups) {
     ctx.save();
@@ -434,16 +493,18 @@ function draw(ctx, layout, app) {
   text(ctx, p.phase === 'stored' ? '已修复' : p.level.decoyArt ? '含干扰碎片' : '待合拢', x + w - 3, levelY + 29,
     { color: COLORS.note, size: 12, align: 'right' });
   const image = app.imageFor(p.level);
-  deskDraw(ctx, layout, p, image, p.level.decoyArt && app.imageFor(p.level.decoyArt));
+  deskDraw(ctx, layout, p, image, p.level.decoyArt && app.imageFor(p.level.decoyArt), app.opening);
   if (!image) {
     const [cx, cy] = [layout.desk.x + layout.desk.w / 2, layout.desk.y + layout.desk.h / 2];
     if (app.imageFailed(p.level)) button(ctx, hits, 'retry', '瓷片加载失败，点此重试', box(cx - 101, cy - 21, 202, 42));
     else text(ctx, '正在取出瓷片…', cx, cy, { align: 'center', color: '#244438', bold: true });
   }
-  text(ctx, app.message, x + w / 2, layout.footerY - 16,
-    { color: app.highlightMessage ? COLORS.gold : COLORS.note, size: 13, align: 'center', width: w - 5 });
-  toolbar(ctx, layout, app, hits);
+  if (!app.opening) {
+    text(ctx, app.message, x + w / 2, layout.footerY - 16,
+      { color: app.highlightMessage ? COLORS.gold : COLORS.note, size: 13, align: 'center', width: w - 5 });
+    toolbar(ctx, layout, app, hits);
+  }
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
 
-module.exports = { computeLayout, contains, draw };
+module.exports = { computeLayout, contains, draw, OPENING_DURATION };

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { computeLayout } = require('../src/core/view.js');
+const { computeLayout, OPENING_DURATION } = require('../src/core/view.js');
 const { Puzzle, areNeighbors, groupBounds, matchNearby, SCALE } = require('../src/core/puzzle.js');
 const levels = require('../src/core/levels.js');
 const { dailyEdition, dailyRandom } = require('../src/core/daily.js');
@@ -56,7 +56,9 @@ async function mockRuntime(output, platform) {
   let storedModes = '';
   let adClosed, videoShown = 0;
   const strokes = [], numberOutlines = [];
+  const cropWidths = [];
   let arcs = 0;
+  let openingFrames = false;
   let stored = JSON.stringify({
     current: 0, wins: [], games: { 0: {
       groups: [
@@ -86,7 +88,10 @@ async function mockRuntime(output, platform) {
     transform.y += y * transform.sy;
   };
   ctx.scale = (x, y) => { transform.sx *= x; transform.sy *= y; };
-  ctx.drawImage = () => { imagesDrawn++; };
+  ctx.drawImage = (_, sourceX, sourceY, sourceWidth) => {
+    imagesDrawn++;
+    cropWidths.push(sourceWidth);
+  };
   ctx.fillText = (label, x, y) => labels.push({
     label, x: (transform.x + x * transform.sx) / info.ratio, y: (transform.y + y * transform.sy) / info.ratio,
   });
@@ -145,8 +150,8 @@ async function mockRuntime(output, platform) {
     api.getMenuButtonLayout = () => ({ top: 27, height: info.menuBottom - 27 });
   }
   function flush() {
-    for (let i = 0; queue.length && i < 100; i++) queue.shift()();
-    assert.equal(queue.length, 0);
+    for (let i = 0; queue.length && i < (openingFrames ? 8 : 100); i++) queue.shift()();
+    assert.ok(queue.length <= (openingFrames ? 1 : 0));
   }
   function screen(world) {
     return [layout.field.x + world[0] * layout.scale, layout.field.y + world[1] * layout.scale];
@@ -183,6 +188,25 @@ async function mockRuntime(output, platform) {
   const realNow = Date.now;
   let now = initialTime;
   Date.now = () => now;
+  function openWithAnimation(label, inspect) {
+    openingFrames = true;
+    cropWidths.length = 0;
+    tapLabel(label);
+    assert.ok(cropWidths.length && cropWidths.every(width => width === 400));
+    assert.equal(queue.length, 1);
+    if (inspect) {
+      assert.equal(numberOutlines.length, 0);
+      cropWidths.length = 0;
+      now += 650;
+      flush();
+      assert.ok(cropWidths.length && cropWidths.every(width => width > 0 && width < 400));
+      assert.equal(numberOutlines.length, 0);
+      assert.ok(!labels.some(item => item.label === '找邻片'));
+    }
+    now += OPENING_DURATION;
+    openingFrames = false;
+    flush();
+  }
   global[environment] = api;
   const rewardConfig = require(path.join(output, 'platform', 'reward-config.js'));
   const originalAdId = rewardConfig.adUnitId;
@@ -236,7 +260,7 @@ async function mockRuntime(output, platform) {
     tapLabel('关闭');
     arcs = 0;
     numberOutlines.length = 0;
-    tapLabel('普通模式');
+    openWithAnimation('普通模式', true);
     const first = () => JSON.parse(storedModes).normal.games[0];
     assert.equal(first().groups.length, 5);
     for (const number of ['1', '2', '3', '4', '5']) assert.ok(labels.some(item => item.label === number));
@@ -277,13 +301,13 @@ async function mockRuntime(output, platform) {
     assert.equal(first().remaining, 60000);
     now += 60001;
     emit('start', [10, 300]);
-    tapLabel('本关重开');
+    openWithAnimation('本关重开');
     assert.equal(first().remaining, 120000);
     tapLabel('‹ 首页');
-    tapLabel('困难模式');
+    openWithAnimation('困难模式');
     assert.equal(JSON.parse(storedModes).hard.games[0].groups.length, 20);
     tapLabel('‹ 首页');
-    tapLabel('极难模式');
+    openWithAnimation('极难模式');
     assert.equal(JSON.parse(storedModes).extreme.games[0].groups.length, 34);
   } finally {
     rewardConfig.adUnitId = originalAdId;
