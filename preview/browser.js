@@ -5,6 +5,8 @@
   const errorBox = document.querySelector('#error');
   const savePrefix = 'jinyao-preview:';
   const savedKey = 'jinyao-museum-v2';
+  const dailyKey = 'jinyao-daily-v1';
+  const modesKey = 'jinyao-modes-v1';
   let resettingSave = false;
 
   function showError(error) {
@@ -64,6 +66,18 @@
         image.onerror = () => failed(file);
         image.src = '/' + file;
       },
+      async share(content, notice) {
+        try {
+          if (typeof navigator.share === 'function') {
+            await navigator.share({ title: content.title, text: content.desc });
+          } else {
+            await navigator.clipboard.writeText(content.title + ' · ' + content.desc);
+            notice('已复制分享文案');
+          }
+        } catch (error) {
+          if (error.name !== 'AbortError') notice('暂时无法分享，请稍后重试');
+        }
+      },
       onInput: makeInput,
       onResize(listener) {
         const observer = new ResizeObserver(listener);
@@ -92,6 +106,8 @@
       if (!window.confirm('清除这个浏览器里的小游戏预览进度？')) return;
       try {
         localStorage.removeItem(savePrefix + savedKey);
+        localStorage.removeItem(savePrefix + dailyKey);
+        localStorage.removeItem(savePrefix + modesKey);
         resettingSave = true;
         window.location.reload();
       } catch (error) { showError(error); }

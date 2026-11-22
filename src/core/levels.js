@@ -18,5 +18,6 @@ module.exports = names.map(function (entry, i) {
     story: entry[2],
     rotations: entry[3],
     snapDistance: i < 2 ? 15 : i < 4 ? 13 : 11,
+    duration: (90 + geometry[i].shards.length * 12) * 1000,
   });
 });

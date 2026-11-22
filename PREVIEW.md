@@ -20,7 +20,7 @@ node scripts/preview.js
 
 给 Codex 的示例任务：
 
-> 先读 AGENTS.md 和 PREVIEW.md。用 node scripts/preview.js 启动本地预览，打开浏览器核验。拖动碎片，检查错片叠放不吸附、正确裂边吸附、整组拖动、描金、刷新恢复和解锁下一关。发现问题先修 src 中的共享源码并回归，最后执行 node scripts/build.js 和 node scripts/check.js。告诉我浏览器里实际验证了什么，以及微信模拟器还应验证什么。
+> 先读 AGENTS.md 和 PREVIEW.md。用 node scripts/preview.js 启动本地预览，打开浏览器核验。拖动碎片，检查碎片序号、错片叠放不吸附、正确裂边吸附、整组拖动、刷新恢复和拼齐后直接解锁下一关。发现问题先修 src 中的共享源码并回归，最后执行 node scripts/build.js 和 node scripts/check.js。告诉我浏览器里实际验证了什么，以及微信模拟器还应验证什么。
 
 浏览器阶段可以验收画面、关卡、拼接、鼠标和浏览器触摸事件。这个入口只供本机开发，供微信使用的入口仍由构建生成。
 

@@ -5,12 +5,45 @@ function optional(api, name) {
   catch (_) { return null; }
 }
 
-function createPlatform(api) {
+function createPlatform(api, adUnitId) {
   const canvas = api.createCanvas();
   let fontFamily = '';
   try { if (typeof api.loadFont === 'function') fontFamily = api.loadFont('assets/jinyao-ui.ttf') || ''; }
   catch (_) { /* System fonts remain available. */ }
   let fs;
+  let video;
+  let adRequest;
+
+  function settleAd(request, error, watched) {
+    if (!request || request !== adRequest) return;
+    adRequest = null;
+    if (error) request.reject(error);
+    else request.resolve(watched);
+  }
+
+  function rewardedVideo() {
+    return new Promise((resolve, reject) => {
+      if (adRequest) {
+        reject(new Error('Rewarded video is already active'));
+        return;
+      }
+      const request = { resolve, reject };
+      adRequest = request;
+      try {
+        if (!video) {
+          video = api.createRewardedVideoAd({ adUnitId });
+          video.onClose(result => settleAd(adRequest, null, result?.isEnded === true));
+          video.onError(error => settleAd(adRequest, error || new Error('Rewarded video failed')));
+        }
+        Promise.resolve(video.load())
+          .then(() => { if (adRequest === request) return video.show(); })
+          .catch(error => settleAd(request, error));
+      } catch (error) {
+        settleAd(request, error);
+      }
+    });
+  }
+
   function bind(name, listener) {
     if (typeof api[name] === 'function') api[name](listener);
   }
@@ -77,6 +110,22 @@ function createPlatform(api) {
       };
     },
     loadImage,
+    rewardedVideo: adUnitId && typeof api.createRewardedVideoAd === 'function' ? rewardedVideo : null,
+    share(content, notice) {
+      if (typeof api.shareAppMessage !== 'function') {
+        notice('当前环境暂不支持分享');
+        return;
+      }
+      try {
+        api.shareAppMessage({
+          ...content,
+          fail(error) {
+            const cancelled = error && (error.errNo === 10502 || /cancel/i.test(error.errMsg || ''));
+            if (!cancelled) notice('暂时无法分享，请稍后重试');
+          },
+        });
+      } catch (_) { notice('暂时无法分享，请稍后重试'); }
+    },
     onInput(listener) {
       observeTouch('onTouchStart', 'start', listener);
       observeTouch('onTouchMove', 'move', listener);

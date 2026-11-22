@@ -1,6 +1,7 @@
 'use strict';
 
 const levels = require('./levels.js');
+const { modes, modeLevel, polygonContains } = require('./modes.js');
 const WIDTH = 400;
 const HEIGHT = 590;
 const SCALE = 0.84;
@@ -17,18 +18,6 @@ function rotatePoint(x, y, turn) {
 
 function limit(value, min, max) {
   return Math.min(max, Math.max(min, value));
-}
-
-function polygonContains(poly, x, y) {
-  let inside = false;
-  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
-    const ax = poly[i];
-    const ay = poly[i + 1];
-    const bx = poly[j];
-    const by = poly[j + 1];
-    if ((ay > y) !== (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax) inside = !inside;
-  }
-  return inside;
 }
 
 function overlap(a, b) {
@@ -104,6 +93,11 @@ function makeGame(level, random) {
     const needsTurn = level.rotations && i < Math.ceil(ids.length * 0.65);
     return { ids: [id], x: 0, y: 0, turn: needsTurn ? 3 - Math.floor(random() * level.rotations) : 0 };
   });
+  arrange(level, groups, random);
+  return { groups, remaining: level.duration };
+}
+
+function arrange(level, groups, random) {
   const arranged = groups.map(function (group) {
     const box = groupBounds(level, group);
     return { group, box, area: (box[2] - box[0]) * (box[3] - box[1]) };
@@ -113,7 +107,7 @@ function makeGame(level, random) {
   for (const item of arranged) {
     const box = item.box;
     let best = null;
-    for (let i = 0; i < 140; i++) {
+    for (let i = 0; i < (groups.length > 24 ? 70 : 140); i++) {
       const x = EDGE - box[0] + random() * (WIDTH - EDGE * 2 + box[0] - box[2]);
       const y = EDGE - box[1] + random() * (HEIGHT - EDGE * 2 + box[1] - box[3]);
       const rect = [box[0] + x, box[1] + y, box[2] + x, box[3] + y];
@@ -131,11 +125,15 @@ function makeGame(level, random) {
     item.group.y = best.y;
     filled.push(best);
   }
-  return { groups, paint: [] };
+}
+
+function complete(group, level) {
+  return group.ids.length === (level.realCount || level.shards.length) &&
+    group.ids.every(id => id < (level.realCount || level.shards.length));
 }
 
 function validGame(game, level) {
-  if (!game || !Array.isArray(game.groups) || !game.groups.length || !Array.isArray(game.paint)) return false;
+  if (!game || !Array.isArray(game.groups) || !game.groups.length) return false;
   const ids = new Set();
   for (const group of game.groups) {
     if (!group || !Array.isArray(group.ids) || !group.ids.length ||
@@ -143,45 +141,66 @@ function validGame(game, level) {
         !Number.isInteger(group.turn) || group.turn < 0 || group.turn > 3) return false;
     for (const id of group.ids) {
       if (!Number.isInteger(id) || id < 0 || id >= level.shards.length || ids.has(id)) return false;
+      if (level.realCount && id >= level.realCount && group.ids.length !== 1) return false;
       ids.add(id);
     }
   }
-  return ids.size === level.shards.length;
+  return ids.size === level.shards.length || (game.groups.length === 1 && complete(game.groups[0], level));
 }
 
 class Puzzle {
-  constructor(saved, random) {
+  constructor(saved, random, dailyIndex, mode) {
     const value = saved && typeof saved === 'object' ? saved : {};
     this.random = random || Math.random;
+    this.dailyIndex = dailyIndex;
+    this.mode = mode;
+    this.limit = mode ? modes[mode].limit : levels.length;
     this.book = {
       current: 0,
-      wins: Array.isArray(value.wins) ? Array.from(new Set(value.wins.filter(i => Number.isInteger(i) && i >= 0 && i < levels.length))) : [],
+      wins: Array.isArray(value.wins) ? Array.from(new Set(value.wins.filter(i => Number.isSafeInteger(i) && i >= 0 && i < this.limit))) : [],
       games: value.games && typeof value.games === 'object' ? value.games : {},
     };
-    this.load(value.current);
+    // An assembled board from an older save may still be waiting for gold points.
+    if (!mode) levels.forEach((level, index) => {
+      const game = this.book.games[index];
+      if (game && Array.isArray(game.groups) && game.groups.length === 1 && validGame(game, level)) {
+        this.storeWin(index);
+      }
+    });
+    this.load(dailyIndex === undefined ? value.current : dailyIndex);
+  }
+
+  storeWin(index) {
+    if (!this.book.wins.includes(index)) this.book.wins.push(index);
   }
 
   unlocked(i) {
+    if (this.dailyIndex !== undefined) return i === this.dailyIndex;
     return i === 0 || this.book.wins.includes(i) || this.book.wins.includes(i - 1);
   }
 
   load(index, reset) {
-    this.index = Number.isInteger(index) && index >= 0 && index < levels.length && this.unlocked(index) ? index : 0;
+    this.index = Number.isSafeInteger(index) && index >= 0 && index < this.limit && this.unlocked(index) ? index : 0;
     this.book.current = this.index;
-    this.level = levels[this.index];
+    this.level = this.mode ? modeLevel(this.mode, this.index) : levels[this.index];
     const saved = this.book.games[this.index];
-    this.state = !reset && validGame(saved, this.level) ? saved : makeGame(this.level, this.random);
+    this.state = !reset && validGame(saved, this.level) ? {
+      groups: saved.groups,
+      remaining: Number.isFinite(saved.remaining) ? Math.max(0, saved.remaining) : this.level.duration,
+    } : makeGame(this.level, this.random);
+    if (this.mode && this.limit === Infinity) {
+      for (const key of Object.keys(this.book.games)) {
+        if (Number(key) !== this.index) delete this.book.games[key];
+      }
+    }
     this.book.games[this.index] = this.state;
     this.selected = null;
     this.hint = [];
-    this.state.paint = this.state.groups.length === 1 ?
-      Array.from(new Set(this.state.paint.filter(n => Number.isInteger(n) && n >= 0 && n < this.level.points.length))) : [];
     for (const group of this.state.groups) place(this.level, group, group.x, group.y);
   }
 
   get phase() {
-    if (this.state.groups.length > 1) return 'fit';
-    return this.state.paint.length < this.level.points.length ? 'gold' : 'stored';
+    return this.state.groups.length === 1 && complete(this.state.groups[0], this.level) ? 'stored' : 'fit';
   }
 
   hit(x, y) {
@@ -190,7 +209,7 @@ class Puzzle {
       const group = groups[i];
       const local = rotatePoint((x - group.x) / SCALE, (y - group.y) / SCALE, (4 - group.turn) % 4);
       const lx = local[0], ly = local[1];
-      if (!polygonContains(this.level.outline, lx, ly)) continue;
+      if (!this.level.procedural && !polygonContains(this.level.outline, lx, ly)) continue;
       for (const id of group.ids) {
         const shard = this.level.shards[id], box = shard.box;
         if (lx >= box[0] && ly >= box[1] && lx <= box[2] && ly <= box[3] && polygonContains(shard.poly, lx, ly)) return group;
@@ -214,8 +233,22 @@ class Puzzle {
   finishMove(group) {
     if (!matchNearby(this.level, this.state.groups, group)) return false;
     this.hint = [];
-    if (this.phase !== 'fit') this.selected = null;
+    if (complete(group, this.level)) {
+      this.state.groups.splice(0, this.state.groups.length, group);
+      this.selected = null;
+      this.storeWin(this.index);
+    }
     return true;
+  }
+
+  rearrange() {
+    if (this.phase === 'stored') return;
+    for (const group of this.state.groups) {
+      if (this.level.rotations) group.turn = (group.turn + 1 + Math.floor(this.random() * 3)) % 4;
+    }
+    arrange(this.level, this.state.groups, this.random);
+    this.selected = null;
+    this.hint = [];
   }
 
   turnSelected() {
@@ -246,27 +279,6 @@ class Puzzle {
     if (!pair) return null;
     this.hint = [pair.a, pair.b];
     return pair;
-  }
-
-  paintAt(x, y) {
-    if (this.phase !== 'gold') return false;
-    const group = this.state.groups[0];
-    const local = rotatePoint((x - group.x) / SCALE, (y - group.y) / SCALE, (4 - group.turn) % 4);
-    let found = -1;
-    let distance = 24;
-    for (let id = 0; id < this.level.points.length; id++) {
-      if (this.state.paint.includes(id)) continue;
-      const mark = this.level.points[id];
-      const gap = Math.hypot(local[0] - mark[0], local[1] - mark[1]);
-      if (gap <= distance) {
-        found = id;
-        distance = gap;
-      }
-    }
-    if (found < 0) return false;
-    this.state.paint.push(found);
-    if (this.phase === 'stored' && !this.book.wins.includes(this.index)) this.book.wins.push(this.index);
-    return true;
   }
 }
 
