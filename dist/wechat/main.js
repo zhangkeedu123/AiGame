@@ -8,7 +8,6 @@ const { modes } = require('./core/modes.js');
 
 const MODES_KEY = 'jinyao-modes-v1';
 const DAILY_KEY = 'jinyao-daily-v1';
-const BONUS_MS = 60000;
 
 class Game {
   constructor(platform) {
@@ -16,7 +15,7 @@ class Game {
     this.canvas = platform.canvas;
     this.fontFamily = platform.fontFamily || '';
     this.ctx = this.canvas.getContext('2d');
-    if (!this.ctx) throw new Error('金缮夜馆需要 Canvas 2D');
+    if (!this.ctx) throw new Error('碎片复原师需要 Canvas 2D');
     this.levels = levels;
     this.modes = modes;
     this.modeBooks = platform.read(MODES_KEY) || {};
@@ -30,7 +29,6 @@ class Game {
     this.clockSince = null;
     this.clockTimer = null;
     this.visible = true;
-    this.watching = false;
     this.homeNotice = '';
     this.shareNotice = '';
     this.textures = new Map();
@@ -157,7 +155,6 @@ class Game {
     this.pauseClock();
     this.cancel();
     this.modal = 'timeout';
-    this.adNotice = '';
     this.save();
     this.renderSoon();
   }
@@ -178,7 +175,6 @@ class Game {
   resumeClock() {
     if (!this.visible || this.opening || !this.puzzle || this.screen === 'home' || this.puzzle.phase === 'stored') return;
     if (this.puzzle.state.remaining === 0) {
-      if (this.modal !== 'timeout') this.adNotice = '';
       this.modal = 'timeout';
       return;
     }
@@ -196,32 +192,6 @@ class Game {
       this.renderSoon();
     }, Math.min(1000, this.puzzle.state.remaining));
     if (this.clockTimer && typeof this.clockTimer.unref === 'function') this.clockTimer.unref();
-  }
-
-  async watchForTime() {
-    if (this.watching || this.modal !== 'timeout') return;
-    if (typeof this.platform.rewardedVideo !== 'function') {
-      this.adNotice = '当前环境暂时无法播放广告';
-      this.renderSoon();
-      return;
-    }
-    this.watching = true;
-    this.adNotice = '';
-    this.renderSoon();
-    try {
-      const watched = await this.platform.rewardedVideo();
-      if (watched) {
-        this.puzzle.state.remaining += BONUS_MS;
-        this.modal = null;
-        this.resumeClock();
-        this.save();
-      } else this.adNotice = '完整观看后可增加时间';
-    } catch (_) {
-      this.adNotice = '广告暂不可用，可以本关重开';
-    } finally {
-      this.watching = false;
-      this.renderSoon();
-    }
   }
 
   updateDailyTime() {
@@ -258,7 +228,7 @@ class Game {
   share() {
     const daily = this.screen === 'daily';
     const time = daily ? formatTime(this.daily.elapsed) : '';
-    const title = daily ? '金缮夜馆 ' + time : '金缮夜馆';
+    const title = daily ? '碎片复原师 ' + time : '碎片复原师';
     const desc = daily ? this.puzzle.level.name + ' · 修复用时 ' + time : '一起来修复国风瓷器';
     const puzzle = this.puzzle;
     const notice = message => {
@@ -410,12 +380,10 @@ class Game {
       p.rearrange();
       this.say('桌面已重排', true);
       this.save();
-    } else if (id === 'ad-time') this.watchForTime();
-    else if (id === 'confirm-reset') {
+    } else if (id === 'confirm-reset') {
       if (this.screen === 'daily') this.openDaily(true);
       else this.load(p.index, true);
-    }
-    else if (id === 'next') this.load(p.index + 1);
+    } else if (id === 'next') this.load(p.index + 1);
     else if (id === 'hint') {
       const near = p.findNeighbors();
       if (!near) return;

@@ -318,21 +318,14 @@ function poster(ctx, level, image, target, repaired) {
 }
 
 function homeBackground(ctx, width, height, image) {
-  ctx.fillStyle = '#f4ebd8';
+  ctx.fillStyle = '#ddccba';
   ctx.fillRect(0, 0, width, height);
   if (image && image.width && image.height) {
     const cover = Math.max(width / image.width, height / image.height);
     const sourceWidth = width / cover, sourceHeight = height / cover;
-    ctx.drawImage(image, (image.width - sourceWidth) / 2, (image.height - sourceHeight) / 2,
+    ctx.drawImage(image, (image.width - sourceWidth) / 2, 0,
       sourceWidth, sourceHeight, 0, 0, width, height);
   }
-  const mist = ctx.createLinearGradient(0, height * 0.32, 0, height);
-  mist.addColorStop(0, 'rgba(250,240,220,0)');
-  mist.addColorStop(0.5, 'rgba(250,240,220,0.78)');
-  mist.addColorStop(0.8, 'rgba(250,240,220,0.61)');
-  mist.addColorStop(1, 'rgba(250,240,220,0.06)');
-  ctx.fillStyle = mist;
-  ctx.fillRect(0, 0, width, height);
 }
 
 function homeIcon(ctx, kind, x, y, color) {
@@ -345,9 +338,12 @@ function homeIcon(ctx, kind, x, y, color) {
     ctx.moveTo(-6, -1); ctx.lineTo(7, -1);
     ctx.moveTo(-6, -5); ctx.lineTo(7, -5); ctx.lineTo(7, 7); ctx.lineTo(-6, 7); ctx.closePath();
   } else if (kind === 'ranking') {
-    ctx.moveTo(-8, 7); ctx.lineTo(-8, 1); ctx.lineTo(-3, 1);
-    ctx.lineTo(-3, -6); ctx.lineTo(3, -6); ctx.lineTo(3, 3);
-    ctx.lineTo(8, 3); ctx.lineTo(8, 7); ctx.closePath();
+    ctx.moveTo(-4, -6); ctx.lineTo(4, -6); ctx.lineTo(4, -2);
+    ctx.quadraticCurveTo(4, 2, 0, 2); ctx.quadraticCurveTo(-4, 2, -4, -2); ctx.closePath();
+    ctx.moveTo(-4, -4); ctx.lineTo(-8, -4); ctx.quadraticCurveTo(-8, 0, -4, 0);
+    ctx.moveTo(4, -4); ctx.lineTo(8, -4); ctx.quadraticCurveTo(8, 0, 4, 0);
+    ctx.moveTo(0, 2); ctx.lineTo(0, 7);
+    ctx.moveTo(-4, 7); ctx.lineTo(4, 7);
   } else if (kind === 'share') {
     ctx.moveTo(-8, 5);
     ctx.quadraticCurveTo(-6, -3, 2, -3);
@@ -368,17 +364,15 @@ function drawHome(ctx, layout, app) {
   const { width, height, top, bottom, w } = layout;
   const hits = [];
   const ink = '#254a40', brass = '#b39262';
-  const available = height - top - bottom;
-  const scale = Math.min(1.1, w / 330, available / 416);
+  const scale = Math.min(1, w / 330, (height - top - bottom) / 392);
   const left = (width - 330 * scale) / 2;
-  const originY = top + (available - 380 * scale) * 0.85;
+  const originY = Math.max(top + 6, Math.min(height / 2 - 143 * scale, height - bottom - 379 * scale));
   homeBackground(ctx, width, height, app.imageFor(HOME_ART));
   ctx.save();
   ctx.translate(left, originY);
   ctx.scale(scale, scale);
 
-  const card = (id, x, y, w, h, radius, fill, stroke) => {
-    rounded(ctx, box(x, y, w, h), radius, fill, stroke);
+  const addHit = (id, x, y, w, h) => {
     hits.push({ id, rect: box(left + x * scale, originY + y * scale, w * scale, h * scale) });
   };
 
@@ -398,7 +392,8 @@ function drawHome(ctx, layout, app) {
     glaze.addColorStop(0, light);
     glaze.addColorStop(1, dark);
     rounded(ctx, box(45, y + 3, 240, 57), 14, 'rgba(67,57,37,0.19)');
-    card('mode-' + mode, 45, y, 240, 57, 14, glaze, '#bd9a63');
+    rounded(ctx, box(45, y, 240, 57), 14, glaze, '#bd9a63');
+    addHit('mode-' + mode, 45, y, 240, 57);
     rounded(ctx, box(49, y + 4, 232, 49), 10, null, 'rgba(247,222,167,0.37)');
     const book = app.modeBooks[mode];
     const progress = book?.wins?.length;
@@ -409,13 +404,33 @@ function drawHome(ctx, layout, app) {
     homeIcon(ctx, 'chevron', 266, y + 28, '#f0d39d');
   });
 
-  [['daily', '每日一瓷'], ['ranking', '排行榜'], ['share', '分享']].forEach(([id, label], i) => {
-    const x = 16 + i * 101;
-    card(id, x, 283, 96, 43, 10, 'rgba(255,248,228,0.91)', 'rgba(135,116,74,0.57)');
-    homeIcon(ctx, id, x + 17, 304, ink);
-    text(ctx, label, x + 31, 305, { size: 13, color: ink, bold: true });
+  const shortcuts = [
+    ['daily', '每日一瓷', '#2d5d4e', '#eee4ca'],
+    ['ranking', '排行榜', '#795434', '#f3dfbb'],
+    ['share', '分享', '#32586c', '#e6e7da'],
+  ];
+  shortcuts.forEach(([id, label, iconColor, fill], i) => {
+    const x = 83 + i * 82;
+    ctx.save();
+    ctx.shadowColor = 'rgba(29,35,30,0.32)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+    rounded(ctx, box(x - 21, 279, 42, 42), 21, fill, '#bd9a63');
+    ctx.restore();
+    rounded(ctx, box(x - 17.5, 282.5, 35, 35), 17.5, null, 'rgba(112,84,47,0.25)');
+    homeIcon(ctx, id, x, 300, iconColor);
+    ctx.save();
+    ctx.shadowColor = 'rgba(25,34,30,0.9)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetY = 1;
+    text(ctx, label, x, 337, { align: 'center', size: 13, color: '#fff3d7', bold: true });
+    ctx.restore();
+    addHit(id, x - 34, 276, 68, 73);
   });
-  if (app.homeNotice) text(ctx, app.homeNotice, 165, 349, { align: 'center', size: 13, color: ink, width: 330 });
+  if (app.homeNotice) {
+    rounded(ctx, box(53, 352, 224, 26), 13, 'rgba(246,235,211,0.95)');
+    text(ctx, app.homeNotice, 165, 365, { align: 'center', size: 12, color: ink, width: 210 });
+  }
   ctx.restore();
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
@@ -425,7 +440,7 @@ function drawModal(ctx, app, layout) {
   const kind = app.modal;
   const hits = [];
   const w = Math.min(420, layout.w);
-  const height = kind === 'timeout' ? 204 : kind === 'reset' ? 170 : Math.min(430, layout.height - layout.top - 34);
+  const height = kind === 'timeout' || kind === 'reset' ? 170 : Math.min(430, layout.height - layout.top - 34);
   const r = box((layout.width - w) / 2, Math.max(layout.top + 4, (layout.height - height) / 2), w, height);
   ctx.fillStyle = 'rgba(8,20,19,0.78)';
   ctx.fillRect(0, 0, layout.width, layout.height);
@@ -434,13 +449,10 @@ function drawModal(ctx, app, layout) {
     kind === 'win' ? '「' + puzzle.level.name + '」已入藏' : puzzle.level.name;
   text(ctx, title, r.x + 14, r.y + 27, { color: COLORS.gold, size: 21, bold: true, serif: true, width: r.w - 84 });
   if (kind === 'timeout') {
-    button(ctx, hits, 'home', '首页', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12, disabled: app.watching });
-    text(ctx, app.adNotice || '重开本关，或完整观看广告续时 60 秒。', r.x + 14, r.y + 76,
+    button(ctx, hits, 'home', '首页', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12 });
+    text(ctx, '可重开本关，重新开始计时。', r.x + 14, r.y + 76,
       { color: COLORS.note, width: r.w - 28 });
-    const actionWidth = (r.w - 37) / 2;
-    button(ctx, hits, 'confirm-reset', '本关重开', box(r.x + 14, r.y + 125, actionWidth, 46), { disabled: app.watching });
-    button(ctx, hits, 'ad-time', app.watching ? '正在播放广告' : '看广告 +60 秒',
-      box(r.x + 23 + actionWidth, r.y + 125, actionWidth, 46), { primary: !app.watching, disabled: app.watching });
+    button(ctx, hits, 'confirm-reset', '本关重开', box(r.x + 14, r.y + 109, r.w - 28, 42), { primary: true });
     return hits;
   }
   button(ctx, hits, 'close', '关闭', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12 });

@@ -1,5 +1,5 @@
 {
-  "description": "金缮夜馆 · 抖音小游戏",
-  "projectname": "jinyao-douyin",
+  "description": "碎片复原师 · 抖音小游戏",
+  "projectname": "suipian-fuyuanshi-douyin",
   "setting": { "es6": true, "minified": true }
 }

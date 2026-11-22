@@ -1,6 +1,6 @@
 {
-  "description": "金缮夜馆 · 微信小游戏",
-  "projectname": "jinyao-wechat",
+  "description": "碎片复原师 · 微信小游戏",
+  "projectname": "suipian-fuyuanshi-wechat",
   "compileType": "game",
   "appid": "touristappid",
   "setting": { "es6": true, "minified": true }

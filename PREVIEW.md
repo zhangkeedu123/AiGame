@@ -1,8 +1,8 @@
-# 先用 Codex 调试，再用微信开发者工具验收
+# 碎片复原师 V1.0 · 本地试玩
 
-## 安装到现有项目
+## 试玩工程
 
-把本补丁的 `scripts`、`preview` 两个目录合并到 `jinyao-minigames` 项目根目录，也就是含有 `AGENTS.md`、`package.json` 和 `src` 的那一层。补丁只新增浏览器预览入口，现有的 `src`、`dist`、`.gitignore` 以及 AppID 配置可以原样保留。
+源码已包含 `scripts` 和 `preview`。在含 `package.json` 与 `src` 的工程根目录启动预览服务。
 
 ## 一、本地预览
 

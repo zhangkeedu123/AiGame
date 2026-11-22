@@ -108,7 +108,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
     process.exitCode = 1;
   });
   server.listen(port, host, () => {
-    console.log('金缮夜馆预览  http://' + host + ':' + port);
+    console.log('碎片复原师预览  http://' + host + ':' + port);
     console.log('保存 src 中的修改后刷新浏览器。按 Ctrl+C 停止预览。');
   });
 }

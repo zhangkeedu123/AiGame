@@ -43,7 +43,7 @@ function verifyFiles(output) {
   }
 }
 
-async function mockRuntime(output, platform) {
+function mockRuntime(output, platform) {
   const info = {
     width: 390, height: 844, ratio: 3, statusBarHeight: 24, menuBottom: 59,
     safeArea: { top: 24, bottom: 817, left: 0, right: 390 },
@@ -54,7 +54,6 @@ async function mockRuntime(output, platform) {
   const edition = dailyEdition(initialTime, levels.length);
   let labels = [], imagesDrawn = 0, imageFallback = 0, fontLoaded = false, share;
   let storedModes = '';
-  let adClosed, videoShown = 0;
   const strokes = [], numberOutlines = [];
   const cropWidths = [];
   let arcs = 0;
@@ -114,15 +113,6 @@ async function mockRuntime(output, platform) {
       else { assert.equal(key, storeKey); stored = data; }
     },
     shareAppMessage(options) { share = options; },
-    createRewardedVideoAd({ adUnitId }) {
-      assert.equal(adUnitId, 'test-reward');
-      return {
-        load: () => Promise.resolve(),
-        show() { videoShown++; return Promise.resolve(); },
-        onClose(listener) { adClosed = listener; },
-        onError() {},
-      };
-    },
     getFileSystemManager: () => ({
       readFileSync(file, encoding) {
         imageFallback++;
@@ -209,9 +199,6 @@ async function mockRuntime(output, platform) {
     flush();
   }
   global[environment] = api;
-  const rewardConfig = require(path.join(output, 'platform', 'reward-config.js'));
-  const originalAdId = rewardConfig.adUnitId;
-  rewardConfig.adUnitId = 'test-reward';
   try {
     require(path.join(output, 'game.js'));
     flush();
@@ -220,7 +207,7 @@ async function mockRuntime(output, platform) {
     assert.ok(fontLoaded && ctx.font.includes('Jinyao UI'));
     assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
     tapLabel('分享');
-    assert.equal(share.title, '金缮夜馆');
+    assert.equal(share.title, '碎片复原师');
     tapLabel('排行榜');
     assert.ok(labels.some(item => item.label === '本机 · 每日一瓷最快五次'));
     tapLabel('挑战每日一瓷');
@@ -283,25 +270,8 @@ async function mockRuntime(output, platform) {
     emit('start', [10, 300]);
     assert.ok(labels.some(item => item.label === '时间到'));
     assert.equal(first().remaining, 0);
-    const expiredGroups = first().groups;
-    tapLabel('看广告 +60 秒');
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(videoShown, 1);
-    adClosed({ isEnded: false });
-    await new Promise(resolve => setImmediate(resolve));
-    flush();
-    assert.equal(first().remaining, 0);
-    tapLabel('看广告 +60 秒');
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(videoShown, 2);
-    adClosed({ isEnded: true });
-    adClosed({ isEnded: true });
-    await new Promise(resolve => setImmediate(resolve));
-    flush();
-    assert.deepEqual(first().groups, expiredGroups);
-    assert.equal(first().remaining, 60000);
-    now += 60001;
-    emit('start', [10, 300]);
+    assert.ok(labels.some(item => item.label === '本关重开'));
+    assert.ok(!labels.some(item => item.label.includes('广告')));
     openWithAnimation('本关重开');
     assert.equal(first().remaining, 120000);
     tapLabel('‹ 首页');
@@ -311,7 +281,6 @@ async function mockRuntime(output, platform) {
     openWithAnimation('极难模式');
     assert.equal(JSON.parse(storedModes).extreme.games[0].groups.length, 34);
   } finally {
-    rewardConfig.adUnitId = originalAdId;
     Date.now = realNow;
     delete global[environment];
   }
@@ -384,16 +353,13 @@ for (const level of levels) {
     assert.equal(groups.length, 1);
   }
 }
-async function checkPlatforms() {
+function checkPlatforms() {
   for (const platform of ['wechat', 'douyin']) {
     const output = path.join(root, 'dist', platform);
     verifyFiles(output);
-    await mockRuntime(output, platform);
-    console.log(platform + '：三种模式、倒计时、重排、重开、广告续时与每日挑战通过本地检查');
+    mockRuntime(output, platform);
+    console.log(platform + '：三种模式、倒计时、重排、无广告重开与每日挑战通过本地检查');
   }
 }
 
-checkPlatforms().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+checkPlatforms();
