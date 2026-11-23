@@ -4,7 +4,7 @@
 
 把本补丁的 `scripts`、`preview` 两个目录合并到 `jinyao-minigames` 项目根目录，也就是含有 `AGENTS.md`、`package.json` 和 `src` 的那一层。补丁只新增浏览器预览入口，现有的 `src`、`dist`、`.gitignore` 以及 AppID 配置可以原样保留。
 
-## 一、本地预览
+## 一、本地预览 
 
 在 VS Code 打开项目根目录。在同一台电脑的终端运行：
 
