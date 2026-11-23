@@ -2,7 +2,8 @@
 
 const levels = require('./core/levels.js');
 const { Puzzle, groupBounds } = require('./core/puzzle.js');
-const { contains, computeLayout, draw, OPENING_DURATION } = require('./core/view.js');
+const { contains, computeLayout, draw, OPENING_DURATION, OPENING_BREAK } = require('./core/view.js');
+const { GameAudio } = require('./core/audio.js');
 const { dailyEdition, dailyRandom, formatTime } = require('./core/daily.js');
 const { modes } = require('./core/modes.js');
 
@@ -13,6 +14,7 @@ const BONUS_MS = 60000;
 class Game {
   constructor(platform) {
     this.platform = platform;
+    this.audio = new GameAudio(platform);
     this.canvas = platform.canvas;
     this.fontFamily = platform.fontFamily || '';
     this.ctx = this.canvas.getContext('2d');
@@ -44,12 +46,14 @@ class Game {
     platform.onResize(() => this.resize());
     platform.onShow(() => {
       this.visible = true;
+      this.audio.setForeground(true);
       if (this.screen === 'home') this.edition = dailyEdition(Date.now(), levels.length);
       this.resumeClock();
       this.resize();
     });
     platform.onHide(() => {
       this.visible = false;
+      this.audio.setForeground(false);
       if (this.opening) this.opening.since = null;
       this.pauseClock();
       this.cancel();
@@ -105,10 +109,12 @@ class Game {
   }
 
   advanceOpening() {
-    if (!this.opening || !this.visible || !this.imageFor(this.puzzle.level)) return false;
+    if (!this.opening || !this.visible || this.modal === 'settings' || !this.imageFor(this.puzzle.level)) return false;
     const now = Date.now();
+    const previous = this.opening.elapsed;
     if (this.opening.since !== null) this.opening.elapsed += Math.max(0, now - this.opening.since);
     this.opening.since = now;
+    if (previous < OPENING_BREAK && this.opening.elapsed >= OPENING_BREAK) this.audio.effect('break');
     if (this.opening.elapsed < OPENING_DURATION) return true;
     this.opening = null;
     this.resumeClock();
@@ -158,6 +164,7 @@ class Game {
     this.cancel();
     this.modal = 'timeout';
     this.adNotice = '';
+    this.audio.effect('timeout');
     this.save();
     this.renderSoon();
   }
@@ -176,7 +183,8 @@ class Game {
   }
 
   resumeClock() {
-    if (!this.visible || this.opening || !this.puzzle || this.screen === 'home' || this.puzzle.phase === 'stored') return;
+    if (!this.visible || this.opening || this.modal === 'settings' || !this.puzzle ||
+        this.screen === 'home' || this.puzzle.phase === 'stored') return;
     if (this.puzzle.state.remaining === 0) {
       if (this.modal !== 'timeout') this.adNotice = '';
       this.modal = 'timeout';
@@ -280,9 +288,8 @@ class Game {
     return { x: (touch.x - field.x) / scale, y: (touch.y - field.y) / scale };
   }
 
-  buttonAt(touch) {
-    const item = this.hits.find(hit => contains(hit.rect, touch.x, touch.y));
-    return item ? item.id : null;
+  hitAt(touch) {
+    return this.hits.find(hit => contains(hit.rect, touch.x, touch.y));
   }
 
   input(kind, touch) {
@@ -304,10 +311,16 @@ class Game {
   }
 
   start(touch) {
-    const button = this.buttonAt(touch);
-    const active = { id: touch.id, first: touch, last: touch, button, group: null, moved: false };
+    this.audio.gesture();
+    const hit = this.hitAt(touch);
+    const active = { id: touch.id, first: touch, last: touch, button: hit?.id,
+      slider: hit?.slider, group: null, moved: false };
     this.active = active;
-    if (button || this.screen === 'home' || this.opening || this.modal || !contains(this.layout.field, touch.x, touch.y)) return;
+    if (active.slider) {
+      this.move(touch);
+      return;
+    }
+    if (hit || this.screen === 'home' || this.opening || this.modal || !contains(this.layout.field, touch.x, touch.y)) return;
     if (this.puzzle.phase !== 'fit' || !this.imageFor(this.puzzle.level)) return;
     const point = this.world(touch);
     const group = this.puzzle.hit(point.x, point.y);
@@ -322,6 +335,12 @@ class Game {
   move(touch) {
     const active = this.active;
     active.last = touch;
+    if (active.slider) {
+      const { channel, x, w } = active.slider;
+      this.audio.setVolume(channel, (touch.x - x) / w * 100);
+      this.renderSoon();
+      return;
+    }
     const dx = touch.x - active.first.x, dy = touch.y - active.first.y;
     if (!active.moved && Math.hypot(dx, dy) < 3) return;
     active.moved = true;
@@ -333,15 +352,19 @@ class Game {
 
   release(touch) {
     const active = this.active;
+    this.audio.gesture();
     this.move(touch);
     this.active = null;
-    if (active.group) {
+    if (active.slider) {
+      this.audio.save();
+      if (active.slider.channel === 'effects') this.audio.effect('join');
+    } else if (active.group) {
       if (active.moved) {
         if (this.puzzle.finishMove(active.group)) this.afterJoin();
         else this.defaultMessage();
       }
       this.save();
-    } else if (!active.moved && active.button && active.button === this.buttonAt(touch)) {
+    } else if (!active.moved && active.button && active.button === this.hitAt(touch)?.id) {
       this.action(active.button);
     }
     this.renderSoon();
@@ -349,8 +372,9 @@ class Game {
 
   cancel() {
     if (!this.active) return;
-    const { group, origin, bounds } = this.active;
+    const { group, origin, bounds, slider } = this.active;
     this.active = null;
+    if (slider) this.audio.save();
     if (group) {
       this.puzzle.dragTo(group, origin[0], origin[1], bounds);
       this.renderSoon();
@@ -359,11 +383,13 @@ class Game {
 
   afterJoin() {
     if (this.puzzle.phase === 'fit') {
+      this.audio.effect('join');
       this.say('裂边已贴合，可以拖动这一整组。', true);
       return;
     }
     this.pauseClock();
     this.modal = 'win';
+    this.audio.effect('win');
     if (this.screen === 'daily') this.recordDaily();
     this.defaultMessage();
     this.highlightMessage = true;
@@ -401,10 +427,21 @@ class Game {
     } else if (id === 'daily') {
       this.edition = dailyEdition(Date.now(), levels.length);
       this.openDaily(false);
-    } else if (id === 'ranking') this.modal = 'ranking';
+    } else if (id === 'settings') {
+      this.pauseClock();
+      if (this.opening) this.opening.since = null;
+      this.modal = 'settings';
+      this.save();
+    } else if (id === 'toggle-music') this.audio.toggle('music');
+    else if (id === 'toggle-effects') this.audio.toggle('effects');
+    else if (id === 'ranking') this.modal = 'ranking';
     else if (id === 'share') this.share();
     else if (id === 'reference') this.modal = 'reference';
-    else if (id === 'close') this.modal = null;
+    else if (id === 'close') {
+      const settings = this.modal === 'settings';
+      this.modal = null;
+      if (settings) this.resumeClock();
+    }
     else if (id === 'reset') this.modal = 'reset';
     else if (id === 'rearrange') {
       p.rearrange();
@@ -423,7 +460,10 @@ class Game {
         : '高亮的是两组邻片，先把方向转一致。', true);
     } else if (id === 'rotate') {
       if (p.turnSelected()) this.afterJoin();
-      else this.say('已顺时针旋转 90°。');
+      else {
+        this.audio.effect('rotate');
+        this.say('已顺时针旋转 90°。');
+      }
       this.save();
     } else if (id === 'retry') this.textures.delete(p.level.image);
     else if (id.startsWith('level-')) this.load(Number(id.slice(6)));

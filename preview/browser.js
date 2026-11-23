@@ -8,6 +8,38 @@
   const dailyKey = 'jinyao-daily-v1';
   const modesKey = 'jinyao-modes-v1';
   let resettingSave = false;
+  let audioContext;
+
+  function unlockAudio() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!audioContext && AudioContext) {
+      try { audioContext = new AudioContext(); } catch (_) { /* Direct playback remains available. */ }
+    }
+    if (audioContext && audioContext.state !== 'running') audioContext.resume().catch(() => {});
+  }
+
+  function createSound(path, loop) {
+    const player = new Audio('/' + path);
+    player.loop = loop;
+    let gain;
+    if (audioContext) {
+      gain = audioContext.createGain();
+      audioContext.createMediaElementSource(player).connect(gain);
+      gain.connect(audioContext.destination);
+    }
+    return {
+      play(restart) {
+        if (restart) player.currentTime = 0;
+        return player.play();
+      },
+      pause() { player.pause(); },
+      stop() { player.pause(); player.currentTime = 0; },
+      setVolume(volume) {
+        if (gain) gain.gain.value = volume;
+        else player.volume = volume;
+      },
+    };
+  }
 
   function showError(error) {
     errorBox.hidden = false;
@@ -56,6 +88,8 @@
     window.jinyaoPreview = window.startJinyao({
       canvas,
       fontFamily: fallback,
+      unlockAudio,
+      createSound,
       windowInfo() {
         const rect = canvas.getBoundingClientRect();
         return { width: rect.width, height: rect.height, ratio: window.devicePixelRatio || 1 };

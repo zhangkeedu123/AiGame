@@ -14,6 +14,7 @@ const root = path.resolve(__dirname, '..');
 const storeKey = 'jinyao-museum-v2';
 const dailyKey = 'jinyao-daily-v1';
 const modesKey = 'jinyao-modes-v1';
+const audioKey = 'jinyao-audio-v1';
 
 function fileNames(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -54,11 +55,13 @@ async function mockRuntime(output, platform) {
   const edition = dailyEdition(initialTime, levels.length);
   let labels = [], imagesDrawn = 0, imageFallback = 0, fontLoaded = false, share;
   let storedModes = '';
+  let storedAudio = '';
   let adClosed, videoShown = 0;
   const strokes = [], numberOutlines = [];
   const cropWidths = [];
   let arcs = 0;
   let openingFrames = false;
+  const sounds = new Map();
   let stored = JSON.stringify({
     current: 0, wins: [], games: { 0: {
       groups: [
@@ -102,15 +105,32 @@ async function mockRuntime(output, platform) {
     statusBarHeight: info.statusBarHeight, safeArea: info.safeArea,
   });
   const on = name => callback => { events[name] = callback; };
+  function createSound() {
+    return {
+      paused: true,
+      playCount: 0,
+      play() { this.paused = false; this.playCount++; },
+      pause() { this.paused = true; },
+      stop() { this.paused = true; },
+      set src(file) {
+        const audio = fs.readFileSync(path.join(output, file));
+        assert.equal(audio.toString('ascii', 0, 4), 'RIFF');
+        assert.equal(audio.toString('ascii', 8, 12), 'WAVE');
+        sounds.set(path.basename(file, '.wav'), this);
+      },
+    };
+  }
   const api = {
     createCanvas: () => canvas,
     loadFont(file) { fontLoaded = fs.existsSync(path.join(output, file)); return fontLoaded ? 'Jinyao UI' : ''; },
     onTouchStart: on('start'), onTouchMove: on('move'), onTouchEnd: on('end'), onTouchCancel: on('cancel'),
     onShow: on('show'), onHide: on('hide'), onWindowResize: on('resize'),
-    getStorageSync: key => key === storeKey ? stored : key === dailyKey ? storedDaily : key === modesKey ? storedModes : '',
+    getStorageSync: key => key === storeKey ? stored : key === dailyKey ? storedDaily :
+      key === modesKey ? storedModes : key === audioKey ? storedAudio : '',
     setStorageSync(key, data) {
       if (key === dailyKey) storedDaily = data;
       else if (key === modesKey) storedModes = data;
+      else if (key === audioKey) storedAudio = data;
       else { assert.equal(key, storeKey); stored = data; }
     },
     shareAppMessage(options) { share = options; },
@@ -144,9 +164,14 @@ async function mockRuntime(output, platform) {
     },
   };
   if (platform === 'wechat') {
+    api.createInnerAudioContext = createSound;
     api.getWindowInfo = systemInfo;
     api.getMenuButtonBoundingClientRect = () => ({ bottom: info.menuBottom });
   } else {
+    api.getAudioContext = () => ({
+      createAudio: createSound,
+      createMediaElementSource: () => ({ connect() {} }),
+    });
     api.getSystemInfoSync = systemInfo;
     api.getMenuButtonLayout = () => ({ top: 27, height: info.menuBottom - 27 });
   }
@@ -219,6 +244,32 @@ async function mockRuntime(output, platform) {
     assert.ok(imagesDrawn > 0);
     assert.ok(fontLoaded && ctx.font.includes('Jinyao UI'));
     assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
+    assert.equal(sounds.size, 0);
+    tapLabel('设置');
+    const music = sounds.get('music-river');
+    assert.equal(music.loop, true);
+    assert.equal(music.volume, 0.45);
+    assert.equal(music.playCount, 1);
+    const modalWidth = Math.min(420, layout.w);
+    const modalLeft = (info.width - modalWidth) / 2;
+    const trackStart = modalLeft + 31, trackWidth = modalWidth - 105;
+    const trackY = (info.height - 270) / 2 + 118;
+    emit('start', [trackStart, trackY]);
+    emit('move', [trackStart + trackWidth * 0.8, trackY]);
+    emit('end', [trackStart + trackWidth * 0.8, trackY]);
+    assert.equal(music.volume, 0.8);
+    assert.equal(JSON.parse(storedAudio).music.volume, 80);
+    tapLabel('开启');
+    assert.equal(JSON.parse(storedAudio).effects.enabled, false);
+    tapLabel('开启');
+    assert.equal(music.paused, true);
+    const musicSwitch = labels.find(item => item.label === '关闭');
+    tap([musicSwitch.x, musicSwitch.y]);
+    assert.equal(music.paused, false);
+    tapLabel('关闭');
+    assert.equal(JSON.parse(storedAudio).effects.enabled, true);
+    assert.equal(sounds.get('sound-join').volume, 0.7);
+    tapLabel('完成');
     tapLabel('分享');
     assert.equal(share.title, '金缮夜馆');
     tapLabel('排行榜');
@@ -236,6 +287,7 @@ async function mockRuntime(output, platform) {
     assert.equal(state().groups.length, 3);
     assert.ok(Math.hypot(center(0)[0] - base[0], center(0)[1] - base[1]) < 0.001);
     drag(center(0), center(0, dailyGroup));
+    assert.ok(sounds.get('sound-join').playCount >= 2);
     const start = center(0);
     strokes.length = 0;
     emit('start', screen(start));
@@ -249,6 +301,7 @@ async function mockRuntime(output, platform) {
     assert.deepEqual(JSON.parse(storedDaily).current.book.games[0].groups.at(-1).ids, [0, 1]);
     now += 6000;
     drag(center(2), center(2, dailyGroup));
+    assert.equal(sounds.get('sound-win').playCount, 1);
     assert.equal(stored, oldCampaign);
     assert.deepEqual(JSON.parse(storedDaily).records, [{ date: edition.date, index: 0, ms: 10000 }]);
     tapLabel('分享成绩');
@@ -262,6 +315,7 @@ async function mockRuntime(output, platform) {
     arcs = 0;
     numberOutlines.length = 0;
     openWithAnimation('普通模式', true);
+    assert.equal(sounds.get('sound-break').playCount, 1);
     const first = () => JSON.parse(storedModes).normal.games[0];
     assert.equal(first().groups.length, 5);
     for (const number of ['1', '2', '3', '4', '5']) assert.ok(labels.some(item => item.label === number));
@@ -274,14 +328,21 @@ async function mockRuntime(output, platform) {
     tapLabel('重排');
     assert.notDeepEqual(first().groups, original.groups);
     assert.equal(first().remaining, original.remaining);
+    tapLabel('设置');
+    now += 45000;
+    tapLabel('完成');
+    assert.equal(first().remaining, original.remaining);
     events.hide();
+    assert.equal(music.paused, true);
     now += 300000;
     events.show();
+    assert.equal(music.paused, false);
     flush();
     assert.ok(labels.some(item => item.label === '02:00'));
     now += 120001;
     emit('start', [10, 300]);
     assert.ok(labels.some(item => item.label === '时间到'));
+    assert.equal(sounds.get('sound-timeout').playCount, 1);
     assert.equal(first().remaining, 0);
     const expiredGroups = first().groups;
     tapLabel('看广告 +60 秒');
@@ -389,7 +450,7 @@ async function checkPlatforms() {
     const output = path.join(root, 'dist', platform);
     verifyFiles(output);
     await mockRuntime(output, platform);
-    console.log(platform + '：三种模式、倒计时、重排、重开、广告续时与每日挑战通过本地检查');
+    console.log(platform + '：三种模式、倒计时、重排、重开、广告续时、每日挑战及声音设置通过本地检查');
   }
 }
 

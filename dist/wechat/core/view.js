@@ -11,7 +11,7 @@ const COLORS = {
 const HINT_OUTLINE = [['rgba(42,52,41,0.58)', 3.4], ['#e8c784', 1.9]];
 const SELECTION_OUTLINE = [['rgba(38,74,62,0.52)', 2.6], ['#d8f1e5', 1.35]];
 const OPENING_DURATION = 1320;
-const BREAK_AT = 440;
+const OPENING_BREAK = 440;
 const HOME_ART = { image: 'assets/home-shanshui.jpg' };
 
 function box(x, y, w, h) { return { x, y, w, h }; }
@@ -190,7 +190,7 @@ function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
   const level = puzzle.level;
   const originX = (WIDTH - 400 * SCALE) / 2;
   const originY = (HEIGHT - 450 * SCALE) / 2;
-  if (elapsed < BREAK_AT) {
+  if (elapsed < OPENING_BREAK) {
     const lift = 24 * (1 - Math.min(1, elapsed / 275)) ** 2;
     ctx.save();
     ctx.translate(originX, originY - lift);
@@ -203,14 +203,14 @@ function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
       ctx.shadowColor = 'transparent';
-      ctx.globalAlpha = (elapsed - 270) / (BREAK_AT - 270);
+      ctx.globalAlpha = (elapsed - 270) / (OPENING_BREAK - 270);
       seams(ctx, level, { ids: level.shards.map((_, id) => id) }, false);
     }
     ctx.restore();
     return;
   }
 
-  const progress = (elapsed - BREAK_AT) / (OPENING_DURATION - BREAK_AT);
+  const progress = (elapsed - OPENING_BREAK) / (OPENING_DURATION - OPENING_BREAK);
   const travel = 1 - (1 - progress) ** 3;
   const kick = Math.sin(Math.PI * progress);
   for (const group of puzzle.state.groups) {
@@ -373,6 +373,11 @@ function drawHome(ctx, layout, app) {
   const left = (width - 330 * scale) / 2;
   const originY = top + (available - 380 * scale) * 0.85;
   homeBackground(ctx, width, height, app.imageFor(HOME_ART));
+  const settings = box(layout.x + w - 66, top + 3, 66, 36);
+  rounded(ctx, settings, 11, '#f5ead2', '#ac8d5e');
+  text(ctx, '设置', settings.x + settings.w / 2, settings.y + settings.h / 2,
+    { align: 'center', color: ink, size: 14, bold: true });
+  hits.push({ id: 'settings', rect: settings });
   ctx.save();
   ctx.translate(left, originY);
   ctx.scale(scale, scale);
@@ -420,19 +425,47 @@ function drawHome(ctx, layout, app) {
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
 
+function soundSettings(ctx, app, r, hits) {
+  for (const [i, channel, label] of [[0, 'music', '背景音乐'], [1, 'effects', '游戏音效']]) {
+    const { enabled, volume } = app.audio.settings[channel];
+    const panel = box(r.x + 14, r.y + 55 + i * 105, r.w - 28, 94);
+    rounded(ctx, panel, 9, '#264139', '#4b655a');
+    text(ctx, label, panel.x + 13, panel.y + 21, { size: 15, bold: true });
+    button(ctx, hits, 'toggle-' + channel, enabled ? '开启' : '关闭',
+      box(panel.x + panel.w - 65, panel.y + 8, 53, 28), { primary: enabled, size: 12 });
+    const slider = { channel, x: panel.x + 17, w: panel.w - 77 };
+    const y = panel.y + 63;
+    const filled = slider.w * volume / 100;
+    rounded(ctx, box(slider.x, y - 3, slider.w, 6), 3, '#142c27');
+    if (filled > 0) rounded(ctx, box(slider.x, y - 3, filled, 6), 3, enabled ? COLORS.gold : '#7d8f85');
+    ctx.beginPath();
+    ctx.arc(slider.x + filled, y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = enabled ? '#fae4b4' : '#a3b2aa';
+    ctx.fill();
+    text(ctx, volume + '%', panel.x + panel.w - 13, y, { size: 13, align: 'right', color: COLORS.note });
+    hits.push({ id: 'volume-' + channel, slider, rect: box(slider.x - 9, y - 17, slider.w + 18, 34) });
+  }
+}
+
 function drawModal(ctx, app, layout) {
   const puzzle = app.puzzle;
   const kind = app.modal;
   const hits = [];
   const w = Math.min(420, layout.w);
-  const height = kind === 'timeout' ? 204 : kind === 'reset' ? 170 : Math.min(430, layout.height - layout.top - 34);
+  const height = kind === 'settings' ? 270 : kind === 'timeout' ? 204 :
+    kind === 'reset' ? 170 : Math.min(430, layout.height - layout.top - 34);
   const r = box((layout.width - w) / 2, Math.max(layout.top + 4, (layout.height - height) / 2), w, height);
   ctx.fillStyle = 'rgba(8,20,19,0.78)';
   ctx.fillRect(0, 0, layout.width, layout.height);
   rounded(ctx, r, 17, COLORS.panel, '#a18b5e');
-  const title = kind === 'ranking' ? '排行榜' : kind === 'timeout' ? '时间到' : kind === 'reset' ? '重新打散碎片？' :
+  const title = kind === 'settings' ? '声音设置' : kind === 'ranking' ? '排行榜' : kind === 'timeout' ? '时间到' : kind === 'reset' ? '重新打散碎片？' :
     kind === 'win' ? '「' + puzzle.level.name + '」已入藏' : puzzle.level.name;
   text(ctx, title, r.x + 14, r.y + 27, { color: COLORS.gold, size: 21, bold: true, serif: true, width: r.w - 84 });
+  if (kind === 'settings') {
+    button(ctx, hits, 'close', '完成', box(r.x + r.w - 67, r.y + 10, 53, 34), { size: 13 });
+    soundSettings(ctx, app, r, hits);
+    return hits;
+  }
   if (kind === 'timeout') {
     button(ctx, hits, 'home', '首页', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12, disabled: app.watching });
     text(ctx, app.adNotice || '重开本关，或完整观看广告续时 60 秒。', r.x + 14, r.y + 76,
@@ -496,9 +529,11 @@ function draw(ctx, layout, app) {
   ctx.fillStyle = COLORS.base;
   ctx.fillRect(0, 0, width, height);
   const daily = app.screen === 'daily';
-  button(ctx, hits, 'home', '‹ 首页', box(x, top + (compact ? 0 : 3), 75, compact ? 31 : 35), { size: 13 });
+  const headerY = top + (compact ? 0 : 3), headerHeight = compact ? 31 : 35;
+  button(ctx, hits, 'home', '‹ 首页', box(x, headerY, 75, headerHeight), { size: 13 });
+  button(ctx, hits, 'settings', '设置', box(x + (w - 90) / 2, headerY, 60, headerHeight), { size: 13 });
   if (p.phase === 'fit') {
-    const clock = box(x + w - 104, top + (compact ? 0 : 3), 104, compact ? 31 : 35);
+    const clock = box(x + w - 104, headerY, 104, headerHeight);
     const low = p.state.remaining <= 15000;
     rounded(ctx, clock, 7, low ? '#51322c' : COLORS.panel, low ? '#d2806e' : COLORS.edge);
     text(ctx, p.state.remaining > 0 ? formatTime(p.state.remaining) : '00:00', clock.x + 52, clock.y + clock.h / 2,
@@ -526,4 +561,4 @@ function draw(ctx, layout, app) {
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
 
-module.exports = { computeLayout, contains, draw, OPENING_DURATION };
+module.exports = { computeLayout, contains, draw, OPENING_DURATION, OPENING_BREAK };

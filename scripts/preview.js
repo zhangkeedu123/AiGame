@@ -68,7 +68,7 @@ const staticFiles = new Map([
   ['/preview/browser.js', [path.join(preview, 'browser.js'), 'text/javascript; charset=utf-8']],
 ]);
 const assetTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp', '.ttf': 'font/ttf' };
+  '.webp': 'image/webp', '.ttf': 'font/ttf', '.wav': 'audio/wav' };
 
 function answer(response, status, type, content) {
   response.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });

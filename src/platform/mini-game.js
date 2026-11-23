@@ -11,6 +11,31 @@ function createPlatform(api, adUnitId) {
   try { if (typeof api.loadFont === 'function') fontFamily = api.loadFont('assets/jinyao-ui.ttf') || ''; }
   catch (_) { /* System fonts remain available. */ }
   let fs;
+  let audioContext;
+
+  function createSound(path, loop) {
+    try {
+      if (audioContext === undefined) audioContext = optional(api, 'getAudioContext');
+      const graph = audioContext && typeof audioContext.createAudio === 'function';
+      const audio = graph ? audioContext.createAudio() : api.createInnerAudioContext?.();
+      if (!audio) return null;
+      if (graph) audioContext.createMediaElementSource(audio).connect(audioContext.destination);
+      audio.autoplay = false;
+      audio.loop = loop;
+      audio.src = path;
+      return {
+        play(restart) {
+          try {
+            if (restart && !audio.paused) audio.stop();
+            return audio.play();
+          } catch (_) { return false; }
+        },
+        pause() { try { audio.pause(); } catch (_) { /* Audio is optional. */ } },
+        stop() { try { if (!audio.paused) audio.stop(); } catch (_) { /* Audio is optional. */ } },
+        setVolume(volume) { try { audio.volume = volume; } catch (_) { /* Older host API. */ } },
+      };
+    } catch (_) { return null; }
+  }
   let video;
   let adRequest;
 
@@ -111,6 +136,7 @@ function createPlatform(api, adUnitId) {
       };
     },
     loadImage,
+    createSound,
     rewardedVideo: adUnitId && typeof api.createRewardedVideoAd === 'function' ? rewardedVideo : null,
     share(content, notice) {
       if (typeof api.shareAppMessage !== 'function') {
