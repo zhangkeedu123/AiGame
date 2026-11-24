@@ -5,7 +5,7 @@ function optional(api, name) {
   catch (_) { return null; }
 }
 
-function createPlatform(api, adUnitId) {
+function createPlatform(api, adUnitId, apiUrl) {
   const canvas = api.createCanvas();
   let fontFamily = '';
   try { if (typeof api.loadFont === 'function') fontFamily = api.loadFont('assets/jinyao-ui.ttf') || ''; }
@@ -120,7 +120,37 @@ function createPlatform(api, adUnitId) {
     try { attempt(path); } catch (_) { failure(path); }
   }
 
+  const online = apiUrl && typeof api.request === 'function' ? {
+    onlineUrl: path => apiUrl + path,
+    onlineRequest(path, { method = 'GET', token, body } = {}) {
+      return new Promise((resolve, reject) => api.request({
+        url: apiUrl + path, method, data: body,
+        header: token ? { Authorization: 'Bearer ' + token } : {},
+        success: response => response.statusCode >= 200 && response.statusCode < 300
+          ? resolve(response.data) : reject(new Error('HTTP ' + response.statusCode)),
+        fail: reject,
+      }));
+    },
+    askToken() {
+      return new Promise(resolve => {
+        if (!api.showKeyboard || !api.onKeyboardConfirm || !api.offKeyboardConfirm ||
+            !api.onKeyboardComplete || !api.offKeyboardComplete) { resolve(''); return; }
+        const finish = value => {
+          api.offKeyboardConfirm(confirm);
+          api.offKeyboardComplete(cancel);
+          resolve(value);
+        };
+        const confirm = result => finish(result.value || '');
+        const cancel = () => finish('');
+        api.onKeyboardConfirm(confirm);
+        api.onKeyboardComplete(cancel);
+        api.showKeyboard({ defaultValue: '', maxLength: 128, multiple: false,
+          confirmHold: false, confirmType: 'done', fail: cancel });
+      });
+    },
+  } : {};
   return {
+    ...online,
     canvas,
     fontFamily,
     windowInfo() {

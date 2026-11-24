@@ -85,7 +85,19 @@
       fallback = 'Jinyao UI';
     } catch (_) { /* Use the system font if the game font is unavailable. */ }
 
+    const onlineEnabled = await fetch('/online-enabled').then(response => response.json()).catch(() => false);
     window.jinyaoPreview = window.startJinyao({
+      ...(onlineEnabled ? {
+        onlineUrl: path => '/online' + path,
+        askToken: () => window.prompt('请输入管理员签发的玩家令牌') || '',
+        async onlineRequest(path, { method = 'GET', token, body } = {}) {
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers.Authorization = 'Bearer ' + token;
+          const response = await fetch('/online' + path, { method, headers, body: body && JSON.stringify(body) });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        },
+      } : {}),
       canvas,
       fontFamily: fallback,
       unlockAudio,
@@ -98,7 +110,7 @@
         const image = new Image();
         image.onload = () => ready(image);
         image.onerror = () => failed(file);
-        image.src = '/' + file;
+        image.src = file.startsWith('/') ? file : '/' + file;
       },
       async share(content, notice) {
         try {

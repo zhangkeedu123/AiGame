@@ -2,12 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { readLocalConfig, readApiOrigin } = require('./api-origin.js');
 
 const root = path.resolve(__dirname, '..');
-const localConfig = path.join(root, 'appids.local.json');
-const ids = fs.existsSync(localConfig) ? JSON.parse(fs.readFileSync(localConfig, 'utf8')) : {};
+const ids = readLocalConfig(root);
 const all = ['wechat', 'douyin'];
 const target = process.argv[2];
+const apiUrl = readApiOrigin(ids, true);
 if (target && !all.includes(target)) {
   console.error('使用方式：node scripts/build.js [wechat|douyin]');
   process.exit(1);
@@ -21,6 +22,8 @@ for (const name of target ? [target] : all) {
     fs.rmSync(path.join(output, directory), { force: true, recursive: true });
   }
   fs.cpSync(path.join(root, 'src'), output, { recursive: true, force: true });
+  fs.writeFileSync(path.join(output, 'platform', 'online-config.js'),
+    "'use strict';\nmodule.exports = " + JSON.stringify({ apiUrl }) + ';\n', 'utf8');
   const rewardedId = ids.rewardedAds?.[name];
   const adUnitId = typeof rewardedId === 'string' ? rewardedId.trim() : '';
   fs.writeFileSync(path.join(output, 'platform', 'reward-config.js'),

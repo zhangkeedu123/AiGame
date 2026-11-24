@@ -78,7 +78,7 @@ async function mockRuntime(output, platform) {
   const ctx = {};
   for (const name of ['rotate','beginPath','closePath','moveTo',
     'lineTo','quadraticCurveTo','fill','clip','fillRect']) ctx[name] = () => {};
-  ctx.arc = () => { arcs++; };
+  ctx.arc = (_, __, radius) => { if (radius >= 9) arcs++; };
   ctx.createLinearGradient = () => ({ addColorStop() {} });
   ctx.stroke = () => strokes.push(ctx.strokeStyle);
   ctx.strokeText = label => numberOutlines.push(label);
@@ -245,7 +245,7 @@ async function mockRuntime(output, platform) {
     assert.ok(fontLoaded && ctx.font.includes('Jinyao UI'));
     assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
     assert.equal(sounds.size, 0);
-    tapLabel('设置');
+    tap([layout.x + layout.w - 21, layout.top + 21]);
     const music = sounds.get('music-river');
     assert.equal(music.loop, true);
     assert.equal(music.volume, 0.45);
@@ -328,7 +328,7 @@ async function mockRuntime(output, platform) {
     tapLabel('重排');
     assert.notDeepEqual(first().groups, original.groups);
     assert.equal(first().remaining, original.remaining);
-    tapLabel('设置');
+    tap([layout.x + layout.w / 2 - 15, layout.top + (layout.compact ? 15.5 : 20.5)]);
     now += 45000;
     tapLabel('完成');
     assert.equal(first().remaining, original.remaining);

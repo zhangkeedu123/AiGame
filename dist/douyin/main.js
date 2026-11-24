@@ -4,6 +4,7 @@ const levels = require('./core/levels.js');
 const { Puzzle, groupBounds } = require('./core/puzzle.js');
 const { contains, computeLayout, draw, OPENING_DURATION, OPENING_BREAK } = require('./core/view.js');
 const { GameAudio } = require('./core/audio.js');
+const { Online } = require('./core/online.js');
 const { dailyEdition, dailyRandom, formatTime } = require('./core/daily.js');
 const { modes } = require('./core/modes.js');
 
@@ -15,6 +16,7 @@ class Game {
   constructor(platform) {
     this.platform = platform;
     this.audio = new GameAudio(platform);
+    this.online = platform.onlineRequest ? new Online(platform) : null;
     this.canvas = platform.canvas;
     this.fontFamily = platform.fontFamily || '';
     this.ctx = this.canvas.getContext('2d');
@@ -150,6 +152,8 @@ class Game {
     } else if (this.screen === 'campaign') {
       this.modeBooks[this.puzzle.mode] = this.puzzle.book;
       this.platform.write(MODES_KEY, this.modeBooks);
+    } else if (this.screen === 'online') {
+      this.platform.write('jinyao-online-' + this.puzzle.level.id, this.puzzle.book);
     }
   }
 
@@ -390,9 +394,51 @@ class Game {
     this.pauseClock();
     this.modal = 'win';
     this.audio.effect('win');
+    if (this.screen === 'online') this.syncOnline();
     if (this.screen === 'daily') this.recordDaily();
     this.defaultMessage();
     this.highlightMessage = true;
+  }
+
+  async syncOnline() {
+    const puzzle = this.puzzle;
+    this.online.notice = '正在同步成绩';
+    let notice;
+    try { notice = await this.online.record(puzzle.level.id, puzzle.state.groups); }
+    catch (_) { notice = '本机已保存，线上同步失败'; }
+    if (puzzle === this.puzzle) {
+      this.online.notice = notice;
+      this.renderSoon();
+    }
+  }
+
+  async onlineAction(id) {
+    const online = this.online;
+    if (!online || online.loading) return;
+    this.modal = 'online';
+    online.loading = true;
+    online.notice = '';
+    this.renderSoon();
+    try {
+      if (id === 'online') await online.refresh();
+      else if (id === 'online-token') {
+        const token = (await this.platform.askToken()).trim();
+        if (token) {
+          await online.login(token);
+          online.notice = '已绑定：' + (online.player.nickname || '玩家');
+        }
+      } else {
+        const level = await online.level(id.slice(13));
+        if (this.modal !== 'online') return;
+        this.puzzle = new Puzzle(this.platform.read('jinyao-online-' + level.id), null, undefined, undefined, level);
+        this.screen = 'online';
+        this.modal = null;
+        this.defaultMessage();
+        this.prepareBoard();
+        if (this.puzzle.phase === 'stored') this.syncOnline();
+      }
+    } catch (_) { online.notice = '连接失败，请检查服务或令牌'; }
+    finally { online.loading = false; this.renderSoon(); }
   }
 
   load(index, restart) {
@@ -427,6 +473,10 @@ class Game {
     } else if (id === 'daily') {
       this.edition = dailyEdition(Date.now(), levels.length);
       this.openDaily(false);
+    } else if (id === 'online' || id === 'online-token' || id.startsWith('online-level-')) {
+      this.onlineAction(id);
+    } else if (id === 'online-prev' || id === 'online-next') {
+      this.online.page += id === 'online-prev' ? -1 : 1;
     } else if (id === 'settings') {
       this.pauseClock();
       if (this.opening) this.opening.since = null;

@@ -318,24 +318,17 @@ function poster(ctx, level, image, target, repaired) {
 }
 
 function homeBackground(ctx, width, height, image) {
-  ctx.fillStyle = '#f4ebd8';
+  ctx.fillStyle = '#ddccba';
   ctx.fillRect(0, 0, width, height);
   if (image && image.width && image.height) {
     const cover = Math.max(width / image.width, height / image.height);
     const sourceWidth = width / cover, sourceHeight = height / cover;
-    ctx.drawImage(image, (image.width - sourceWidth) / 2, (image.height - sourceHeight) / 2,
+    ctx.drawImage(image, (image.width - sourceWidth) / 2, 0,
       sourceWidth, sourceHeight, 0, 0, width, height);
   }
-  const mist = ctx.createLinearGradient(0, height * 0.32, 0, height);
-  mist.addColorStop(0, 'rgba(250,240,220,0)');
-  mist.addColorStop(0.5, 'rgba(250,240,220,0.78)');
-  mist.addColorStop(0.8, 'rgba(250,240,220,0.61)');
-  mist.addColorStop(1, 'rgba(250,240,220,0.06)');
-  ctx.fillStyle = mist;
-  ctx.fillRect(0, 0, width, height);
 }
 
-function homeIcon(ctx, kind, x, y, color) {
+function drawIcon(ctx, kind, x, y, color) {
   ctx.save();
   ctx.translate(x, y);
   ctx.beginPath();
@@ -345,14 +338,29 @@ function homeIcon(ctx, kind, x, y, color) {
     ctx.moveTo(-6, -1); ctx.lineTo(7, -1);
     ctx.moveTo(-6, -5); ctx.lineTo(7, -5); ctx.lineTo(7, 7); ctx.lineTo(-6, 7); ctx.closePath();
   } else if (kind === 'ranking') {
-    ctx.moveTo(-8, 7); ctx.lineTo(-8, 1); ctx.lineTo(-3, 1);
-    ctx.lineTo(-3, -6); ctx.lineTo(3, -6); ctx.lineTo(3, 3);
-    ctx.lineTo(8, 3); ctx.lineTo(8, 7); ctx.closePath();
+    ctx.moveTo(-4, -6); ctx.lineTo(4, -6); ctx.lineTo(4, -2);
+    ctx.quadraticCurveTo(4, 2, 0, 2); ctx.quadraticCurveTo(-4, 2, -4, -2); ctx.closePath();
+    ctx.moveTo(-4, -4); ctx.lineTo(-8, -4); ctx.quadraticCurveTo(-8, 0, -4, 0);
+    ctx.moveTo(4, -4); ctx.lineTo(8, -4); ctx.quadraticCurveTo(8, 0, 4, 0);
+    ctx.moveTo(0, 2); ctx.lineTo(0, 7);
+    ctx.moveTo(-4, 7); ctx.lineTo(4, 7);
   } else if (kind === 'share') {
     ctx.moveTo(-8, 5);
     ctx.quadraticCurveTo(-6, -3, 2, -3);
     ctx.lineTo(2, -7); ctx.lineTo(9, -1); ctx.lineTo(2, 5); ctx.lineTo(2, 1);
     ctx.quadraticCurveTo(-5, 1, -8, 5);
+  } else if (kind === 'settings') {
+    for (let tooth = 0; tooth < 8; tooth++) {
+      const angle = tooth * Math.PI / 4;
+      for (const [edge, radius] of [[-0.39, 7.2], [-0.19, 9.6], [0.19, 9.6], [0.39, 7.2]]) {
+        const px = Math.cos(angle + edge) * radius, py = Math.sin(angle + edge) * radius;
+        if (tooth === 0 && edge === -0.39) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+    }
+    ctx.closePath();
+    ctx.moveTo(3.2, 0);
+    ctx.arc(0, 0, 3.2, 0, Math.PI * 2);
   } else {
     ctx.moveTo(-3, -4); ctx.lineTo(2, 0); ctx.lineTo(-3, 4);
   }
@@ -364,26 +372,27 @@ function homeIcon(ctx, kind, x, y, color) {
   ctx.restore();
 }
 
+function settingsButton(ctx, hits, rect, light) {
+  rounded(ctx, rect, 12, light ? 'rgba(245,234,210,0.93)' : '#29483e', light ? '#ac8d5e' : COLORS.edge);
+  drawIcon(ctx, 'settings', rect.x + rect.w / 2, rect.y + rect.h / 2, light ? '#254a40' : '#f1d7a1');
+  hits.push({ id: 'settings', rect });
+}
+
 function drawHome(ctx, layout, app) {
   const { width, height, top, bottom, w } = layout;
   const hits = [];
   const ink = '#254a40', brass = '#b39262';
-  const available = height - top - bottom;
-  const scale = Math.min(1.1, w / 330, available / 416);
+  const scale = Math.min(1, w / 330, (height - top - bottom) / 392);
   const left = (width - 330 * scale) / 2;
-  const originY = top + (available - 380 * scale) * 0.85;
+  const originY = Math.max(top + 6, Math.min(height / 2 - 143 * scale, height - bottom - 379 * scale));
   homeBackground(ctx, width, height, app.imageFor(HOME_ART));
-  const settings = box(layout.x + w - 66, top + 3, 66, 36);
-  rounded(ctx, settings, 11, '#f5ead2', '#ac8d5e');
-  text(ctx, '设置', settings.x + settings.w / 2, settings.y + settings.h / 2,
-    { align: 'center', color: ink, size: 14, bold: true });
-  hits.push({ id: 'settings', rect: settings });
+  if (app.online) button(ctx, hits, 'online', '线上关卡', box(layout.x + w - 142, top + 3, 90, 36), { size: 13 });
+  settingsButton(ctx, hits, box(layout.x + w - 42, top + 3, 42, 36), true);
   ctx.save();
   ctx.translate(left, originY);
   ctx.scale(scale, scale);
 
-  const card = (id, x, y, w, h, radius, fill, stroke) => {
-    rounded(ctx, box(x, y, w, h), radius, fill, stroke);
+  const addHit = (id, x, y, w, h) => {
     hits.push({ id, rect: box(left + x * scale, originY + y * scale, w * scale, h * scale) });
   };
 
@@ -403,7 +412,8 @@ function drawHome(ctx, layout, app) {
     glaze.addColorStop(0, light);
     glaze.addColorStop(1, dark);
     rounded(ctx, box(45, y + 3, 240, 57), 14, 'rgba(67,57,37,0.19)');
-    card('mode-' + mode, 45, y, 240, 57, 14, glaze, '#bd9a63');
+    rounded(ctx, box(45, y, 240, 57), 14, glaze, '#bd9a63');
+    addHit('mode-' + mode, 45, y, 240, 57);
     rounded(ctx, box(49, y + 4, 232, 49), 10, null, 'rgba(247,222,167,0.37)');
     const book = app.modeBooks[mode];
     const progress = book?.wins?.length;
@@ -411,16 +421,36 @@ function drawHome(ctx, layout, app) {
       book?.current === undefined ? detail : '继续第 ' + (book.current + 1) + ' 关 · ' + detail.split(' · ')[0];
     text(ctx, app.modes[mode].name, 165, y + 20, { align: 'center', size: 20, bold: true, color: '#fff2d2' });
     text(ctx, subtitle, 165, y + 40, { align: 'center', size: 11.5, color: '#f1ddaf' });
-    homeIcon(ctx, 'chevron', 266, y + 28, '#f0d39d');
+    drawIcon(ctx, 'chevron', 266, y + 28, '#f0d39d');
   });
 
-  [['daily', '每日一瓷'], ['ranking', '排行榜'], ['share', '分享']].forEach(([id, label], i) => {
-    const x = 16 + i * 101;
-    card(id, x, 283, 96, 43, 10, 'rgba(255,248,228,0.91)', 'rgba(135,116,74,0.57)');
-    homeIcon(ctx, id, x + 17, 304, ink);
-    text(ctx, label, x + 31, 305, { size: 13, color: ink, bold: true });
+  const shortcuts = [
+    ['daily', '每日一瓷', '#2d5d4e', '#eee4ca'],
+    ['ranking', '排行榜', '#795434', '#f3dfbb'],
+    ['share', '分享', '#32586c', '#e6e7da'],
+  ];
+  shortcuts.forEach(([id, label, color, fill], i) => {
+    const x = 83 + i * 82;
+    ctx.save();
+    ctx.shadowColor = 'rgba(29,35,30,0.32)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+    rounded(ctx, box(x - 21, 279, 42, 42), 21, fill, '#bd9a63');
+    ctx.restore();
+    rounded(ctx, box(x - 17.5, 282.5, 35, 35), 17.5, null, 'rgba(112,84,47,0.25)');
+    drawIcon(ctx, id, x, 300, color);
+    ctx.save();
+    ctx.shadowColor = 'rgba(25,34,30,0.9)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetY = 1;
+    text(ctx, label, x, 337, { align: 'center', size: 13, color: '#fff3d7', bold: true });
+    ctx.restore();
+    addHit(id, x - 34, 276, 68, 73);
   });
-  if (app.homeNotice) text(ctx, app.homeNotice, 165, 349, { align: 'center', size: 13, color: ink, width: 330 });
+  if (app.homeNotice) {
+    rounded(ctx, box(53, 352, 224, 26), 13, 'rgba(246,235,211,0.95)');
+    text(ctx, app.homeNotice, 165, 365, { align: 'center', size: 12, color: ink, width: 210 });
+  }
   ctx.restore();
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
@@ -458,7 +488,7 @@ function drawModal(ctx, app, layout) {
   ctx.fillStyle = 'rgba(8,20,19,0.78)';
   ctx.fillRect(0, 0, layout.width, layout.height);
   rounded(ctx, r, 17, COLORS.panel, '#a18b5e');
-  const title = kind === 'settings' ? '声音设置' : kind === 'ranking' ? '排行榜' : kind === 'timeout' ? '时间到' : kind === 'reset' ? '重新打散碎片？' :
+  const title = kind === 'online' ? '线上关卡' : kind === 'settings' ? '声音设置' : kind === 'ranking' ? '排行榜' : kind === 'timeout' ? '时间到' : kind === 'reset' ? '重新打散碎片？' :
     kind === 'win' ? '「' + puzzle.level.name + '」已入藏' : puzzle.level.name;
   text(ctx, title, r.x + 14, r.y + 27, { color: COLORS.gold, size: 21, bold: true, serif: true, width: r.w - 84 });
   if (kind === 'settings') {
@@ -477,7 +507,23 @@ function drawModal(ctx, app, layout) {
     return hits;
   }
   button(ctx, hits, 'close', '关闭', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12 });
-  if (kind === 'ranking') {
+  if (kind === 'online') {
+    const { levels, page, loading, notice } = app.online;
+    const rows = Math.max(1, Math.min(5, Math.floor((r.h - 142) / 43)));
+    const start = page * rows;
+    if (loading || notice || !levels.length) text(ctx, loading ? '连接中…' : notice || '暂无线上的已发布关卡',
+      r.x + 14, r.y + 60, { size: 13, width: r.w - 28 });
+    if (!loading) {
+      levels.slice(start, start + rows).forEach((level, i) =>
+        button(ctx, hits, 'online-level-' + level.id, level.name, box(r.x + 14, r.y + 80 + i * 43, r.w - 28, 37)));
+      const y = r.y + r.h - 50;
+      const w = (r.w - 36) / 3;
+      button(ctx, hits, 'online-prev', '上一页', box(r.x + 14, y, w, 36), { disabled: page === 0, size: 12 });
+      button(ctx, hits, 'online-token', '绑定令牌', box(r.x + 18 + w, y, w, 36), { size: 12 });
+      button(ctx, hits, 'online-next', '下一页', box(r.x + 22 + w * 2, y, w, 36),
+        { disabled: start + rows >= levels.length, size: 12 });
+    }
+  } else if (kind === 'ranking') {
     text(ctx, '本机 · 每日一瓷最快五次', r.x + 14, r.y + 63, { size: 14, color: COLORS.note });
     if (!app.records.length) {
       text(ctx, '完成今日修复后，用时将显示在这里。', r.x + 14, r.y + 108,
@@ -506,6 +552,7 @@ function drawModal(ctx, app, layout) {
     rounded(ctx, artwork, 10, '#3c5647');
     poster(ctx, puzzle.level, app.imageFor(puzzle.level), artwork, puzzle.phase === 'stored');
     const label = kind !== 'win' ? puzzle.level.story : daily ? '本次修复用时 ' + formatTime(app.daily.elapsed) :
+      app.screen === 'online' ? app.online.notice :
       last ? '本模式全部关卡已完成。' : '下一关已解锁。';
     text(ctx, label, r.x + 14, artwork.y + artwork.h + 21, { color: COLORS.note, width: r.w - 28 });
     if (kind === 'win') {
@@ -531,7 +578,7 @@ function draw(ctx, layout, app) {
   const daily = app.screen === 'daily';
   const headerY = top + (compact ? 0 : 3), headerHeight = compact ? 31 : 35;
   button(ctx, hits, 'home', '‹ 首页', box(x, headerY, 75, headerHeight), { size: 13 });
-  button(ctx, hits, 'settings', '设置', box(x + (w - 90) / 2, headerY, 60, headerHeight), { size: 13 });
+  settingsButton(ctx, hits, box(x + (w - 70) / 2, headerY, 40, headerHeight), false);
   if (p.phase === 'fit') {
     const clock = box(x + w - 104, headerY, 104, headerHeight);
     const low = p.state.remaining <= 15000;

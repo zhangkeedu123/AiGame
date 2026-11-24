@@ -14,6 +14,8 @@ node scripts/preview.js
 
 使用 Node.js 18 或更高版本。保持终端运行，用 Chrome 或 Edge 打开 [http://127.0.0.1:4173](http://127.0.0.1:4173)。如果端口被占用，运行 `node scripts/preview.js 4174`，打开终端打印的新地址。
 
+要试玩线上关卡，将 `appids.example.json` 复制为 `appids.local.json`，把 `apiUrl` 设为 `http://127.0.0.1:8000`，启动 AiGameApi 后重启预览。微信和抖音构建也读取这份 JSON，修改地址后需要重新构建。HTTP 环回地址用于本机，真机需使用可访问的 HTTPS API 地址。
+
 如果使用本机 Codex 桌面端，也可以在它的内置浏览器打开同一个地址。使用 VS Code 扩展时，可以继续在编辑器里让 Codex 修改源码，同时在 Chrome 或 Edge 里刷新验证。
 
 预览会从当前 `src/main.js` 加载同一套玩法和 Canvas 界面。修改后保存文件，按 Ctrl+R 刷新即可。按 F12 查看 Console 报错。需要回到第一关时，可以用页面上的「清除预览存档」。网页预览使用本机浏览器存储，微信存档由微信运行时处理。终端里按 Ctrl+C 可以停止服务。

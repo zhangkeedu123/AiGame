@@ -149,19 +149,20 @@ function validGame(game, level) {
 }
 
 class Puzzle {
-  constructor(saved, random, dailyIndex, mode) {
+  constructor(saved, random, dailyIndex, mode, onlineLevel) {
     const value = saved && typeof saved === 'object' ? saved : {};
     this.random = random || Math.random;
     this.dailyIndex = dailyIndex;
     this.mode = mode;
-    this.limit = mode ? modes[mode].limit : levels.length;
+    this.onlineLevel = onlineLevel;
+    this.limit = onlineLevel ? 1 : mode ? modes[mode].limit : levels.length;
     this.book = {
       current: 0,
       wins: Array.isArray(value.wins) ? Array.from(new Set(value.wins.filter(i => Number.isSafeInteger(i) && i >= 0 && i < this.limit))) : [],
       games: value.games && typeof value.games === 'object' ? value.games : {},
     };
     // An assembled board from an older save may still be waiting for gold points.
-    if (!mode) levels.forEach((level, index) => {
+    if (!mode && !onlineLevel) levels.forEach((level, index) => {
       const game = this.book.games[index];
       if (game && Array.isArray(game.groups) && game.groups.length === 1 && validGame(game, level)) {
         this.storeWin(index);
@@ -182,7 +183,7 @@ class Puzzle {
   load(index, reset) {
     this.index = Number.isSafeInteger(index) && index >= 0 && index < this.limit && this.unlocked(index) ? index : 0;
     this.book.current = this.index;
-    this.level = this.mode ? modeLevel(this.mode, this.index) : levels[this.index];
+    this.level = this.onlineLevel || (this.mode ? modeLevel(this.mode, this.index) : levels[this.index]);
     const saved = this.book.games[this.index];
     this.newBoard = Boolean(reset) || !validGame(saved, this.level);
     this.state = this.newBoard ? makeGame(this.level, this.random) : {
