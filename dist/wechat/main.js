@@ -6,6 +6,10 @@ const { contains, computeLayout, draw, OPENING_DURATION, OPENING_BREAK } = requi
 const { GameAudio } = require('./core/audio.js');
 const { dailyEdition, dailyRandom, formatTime } = require('./core/daily.js');
 const { modes } = require('./core/modes.js');
+const config = require('./config.js');
+const { createApi } = require('./core/api.js');
+const { loadLevels } = require('./core/remote.js');
+const progressBook = require('./core/progress.js');
 
 const MODES_KEY = 'jinyao-modes-v1';
 const DAILY_KEY = 'jinyao-daily-v1';
@@ -19,6 +23,14 @@ class Game {
     this.fontFamily = platform.fontFamily || '';
     this.ctx = this.canvas.getContext('2d');
     if (!this.ctx) throw new Error('金缮夜馆需要 Canvas 2D');
+    // 接口地址与令牌来自 config.js：dev 连本机后端，master 连服务器。
+    this.env = config.resolve(platform);
+    this.api = createApi(platform, { apiBase: this.env.apiBase, playerToken: this.env.playerToken });
+    this.profile = null;
+    this.remoteProgress = {};
+    this.syncTimer = null;
+    this.syncing = false;
+    this.status = this.env.label + ' · 正在连接';
     this.levels = levels;
     this.modes = modes;
     this.modeBooks = platform.read(MODES_KEY) || {};
@@ -60,6 +72,190 @@ class Game {
       this.save();
       this.dailySince = null;
     });
+    this.connect();
+  }
+
+  // 启动时拉一次后台：先关卡，再玩家与存档。任何一步失败都退回到本地数据。
+  async connect() {
+    if (!this.api.enabled) {
+      this.statusNote = '当前环境不支持网络，使用本地存档';
+      this.updateStatus();
+      return;
+    }
+    await this.syncLevels();
+    await this.syncPlayer();
+  }
+
+  updateStatus() {
+    const parts = [this.env.label];
+    if (this.levelCount) parts.push(this.levelCount + ' 关');
+    if (this.playerName) parts.push(this.playerName);
+    if (this.statusNote) parts.push(this.statusNote);
+    this.status = parts.filter(Boolean).join(' · ');
+    this.renderSoon();
+  }
+
+  async syncLevels() {
+    try {
+      const list = await loadLevels(this.api);
+      if (!list) {
+        this.statusNote = '后台还没有已发布关卡';
+      } else {
+        // 原地替换：puzzle.js 与 modes.js 引用的是同一个数组。
+        levels.splice(0, levels.length, ...list);
+        this.textures.clear();
+        this.edition = dailyEdition(Date.now(), levels.length);
+        this.levelCount = list.length;
+        this.statusNote = '关卡已同步';
+      }
+    } catch (error) {
+      this.statusNote = '关卡用本地兜底（' + error.message + '）';
+    }
+    this.updateStatus();
+  }
+
+  async syncPlayer() {
+    if (!this.api.token) {
+      this.statusNote = '未配置玩家令牌';
+      this.updateStatus();
+      return;
+    }
+    try {
+      this.profile = await this.api.login();
+      this.playerName = this.profile.nickname || '玩家';
+      this.statusNote = '已登录';
+    } catch (error) {
+      this.statusNote = '登录失败（' + error.message + '）';
+      this.updateStatus();
+      return;
+    }
+    this.updateStatus();
+    try {
+      this.applyRemoteProgress(await this.api.progress());
+    } catch (error) {
+      this.statusNote = '存档读取失败（' + error.message + '）';
+      this.updateStatus();
+    }
+  }
+
+  applyRemoteProgress(data, restore) {
+    const map = {};
+    if (data && Array.isArray(data.progress)) {
+      for (const item of data.progress) map[item.level_id] = item;
+    }
+    this.remoteProgress = map;
+    this.remoteReady = true;
+    // 后台按顺序解锁：每日一瓷只在已解锁的画作里挑，避免存到还没开放的关卡。
+    const edition = dailyEdition(Date.now(), Math.max(1, this.unlockedCount()));
+    if (this.screen === 'home') {
+      this.edition = edition;
+    } else if (this.screen === 'daily' && this.puzzle && this.puzzle.newBoard &&
+               edition.index !== this.edition.index) {
+      // 进度比页面晚到：只要还没动过盘面，就按新的解锁范围重选今天的画作。
+      this.edition = edition;
+      this.openDaily(false);
+      return;
+    }
+    if (restore !== false) this.restoreDaily();
+  }
+
+  unlockedCount() {
+    const total = this.levels.length;
+    let count = 1;
+    for (let i = 0; i < total; i++) {
+      const level = this.levels[i];
+      const item = level && level.remoteId ? this.remoteProgress[level.remoteId] : null;
+      if (!item || !item.completed) break;
+      count = i + 2;
+    }
+    return Math.min(Math.max(count, 1), total);
+  }
+
+  // 每日一瓷用的就是后台那一关的完整几何，碎片数量能对上，可以直接续玩。
+  restoreDaily() {
+    const puzzle = this.puzzle;
+    if (!this.remoteReady || this.screen !== 'daily' || !puzzle) return false;
+    const level = puzzle.level;
+    if (!level || !level.remoteId || !puzzle.newBoard) return false;
+    const item = this.remoteProgress[level.remoteId];
+    if (!item || !Array.isArray(item.groups) || !item.groups.length) return false;
+    const groups = progressBook.restore(level, item.groups);
+    if (!groups) return false;
+    puzzle.book.games[puzzle.index] = { groups, remaining: level.duration };
+    puzzle.load(puzzle.index);
+    this.say('已从' + this.env.label + '恢复进度（修订号 ' + item.revision + '）', true);
+    this.renderSoon();
+    return true;
+  }
+
+  queueSync() {
+    if (!this.api || !this.api.enabled || !this.remoteReady) return;
+    const puzzle = this.puzzle;
+    if (!puzzle) return;
+    if (this.screen === 'daily') {
+      if (!puzzle.level || !puzzle.level.remoteId) return;
+    } else if (this.screen === 'campaign') {
+      // 三模式只上报通关，过程盘面是本地切分的，和后台关卡碎片数不一致。
+      if (puzzle.phase !== 'stored') return;
+    } else return;
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      this.flushSync();
+    }, 1200);
+    if (typeof this.syncTimer.unref === 'function') this.syncTimer.unref();
+  }
+
+  syncTarget() {
+    const puzzle = this.puzzle;
+    if (!puzzle) return null;
+    if (this.screen === 'daily') return puzzle.level || null;
+    if (this.screen === 'campaign') return this.levels[puzzle.index % this.levels.length] || null;
+    return null;
+  }
+
+  async flushSync() {
+    const puzzle = this.puzzle;
+    const target = this.syncTarget();
+    if (!puzzle || !target || !target.remoteId) return;
+    if (this.syncing) {
+      this.queueSync();
+      return;
+    }
+    const snapshot = this.screen === 'daily' && puzzle.level === target
+      ? progressBook.snapshot(puzzle.state, puzzle.phase === 'stored')
+      : puzzle.phase === 'stored' ? progressBook.completed(target.shards.length) : null;
+    if (!snapshot) return;
+    this.syncing = true;
+    const levelId = target.remoteId;
+    const body = snapshot;
+    const known = this.remoteProgress[levelId];
+    body.revision = known ? known.revision : 0;
+    try {
+      this.remoteProgress[levelId] = await this.api.saveProgress(levelId, body);
+      this.syncLabel = '进度已存到' + this.env.label;
+    } catch (error) {
+      if (error.status === 409) {
+        try {
+          this.applyRemoteProgress(await this.api.progress(), false);
+          const fresh = this.remoteProgress[levelId];
+          body.revision = fresh ? fresh.revision : 0;
+          this.remoteProgress[levelId] = await this.api.saveProgress(levelId, body);
+          this.syncLabel = '修订号冲突，已重读后保存';
+        } catch (inner) {
+          this.syncLabel = '存档冲突：' + inner.message;
+        }
+      } else if (error.status === 403) {
+        this.syncLabel = '后台按顺序解锁，这一关还没开放';
+      } else if (error.status === 401) {
+        this.syncLabel = '令牌无效，进度只存本地';
+      } else {
+        this.syncLabel = '存档失败：' + error.message;
+      }
+    } finally {
+      this.syncing = false;
+      this.renderSoon();
+    }
   }
 
   defaultMessage() {
@@ -151,6 +347,7 @@ class Game {
       this.modeBooks[this.puzzle.mode] = this.puzzle.book;
       this.platform.write(MODES_KEY, this.modeBooks);
     }
+    this.queueSync();
   }
 
   syncClock() {
@@ -251,6 +448,7 @@ class Game {
     this.defaultMessage();
     this.prepareBoard();
     this.save();
+    this.restoreDaily();
   }
 
   recordDaily() {
@@ -425,7 +623,8 @@ class Game {
       this.prepareBoard();
       this.save();
     } else if (id === 'daily') {
-      this.edition = dailyEdition(Date.now(), levels.length);
+      this.edition = dailyEdition(Date.now(),
+        Math.max(1, this.remoteReady ? this.unlockedCount() : levels.length));
       this.openDaily(false);
     } else if (id === 'settings') {
       this.pauseClock();

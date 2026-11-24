@@ -94,11 +94,13 @@ function createPlatform(api, adUnitId) {
 
   function loadImage(path, success, failure) {
     let fallback = false;
+    // 后台图集是 http(s) 绝对地址，小程序里不能走 readFileSync 兜底。
+    const remote = /^https?:\/\//i.test(path);
     function attempt(src) {
       const image = api.createImage();
       function ready() { success(image); }
       function failed() {
-        if (fallback) { failure(path); return; }
+        if (fallback || remote) { failure(path); return; }
         fallback = true;
         try {
           fs = fs || optional(api, 'getFileSystemManager');
@@ -162,6 +164,30 @@ function createPlatform(api, adUnitId) {
     onResize(listener) { bind('onWindowResize', listener); },
     onShow(listener) { bind('onShow', listener); },
     onHide(listener) { bind('onHide', listener); },
+    request(options) {
+      if (typeof api.request !== 'function') {
+        if (options.fail) options.fail({ errMsg: '当前环境不支持网络请求' });
+        return;
+      }
+      try {
+        api.request({
+          url: options.url,
+          method: options.method || 'GET',
+          header: options.header || {},
+          data: options.data,
+          timeout: options.timeout || 12000,
+          dataType: 'json',
+          success(response) {
+            if (options.success) options.success({ statusCode: response.statusCode, data: response.data });
+          },
+          fail(error) {
+            if (options.fail) options.fail(error || { errMsg: '网络请求失败' });
+          },
+        });
+      } catch (error) {
+        if (options.fail) options.fail(error);
+      }
+    },
     read(key) {
       try {
         const data = api.getStorageSync(key);

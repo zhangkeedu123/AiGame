@@ -421,6 +421,10 @@ function drawHome(ctx, layout, app) {
     text(ctx, label, x + 31, 305, { size: 13, color: ink, bold: true });
   });
   if (app.homeNotice) text(ctx, app.homeNotice, 165, 349, { align: 'center', size: 13, color: ink, width: 330 });
+  const footer = app.status ? app.status + (app.syncLabel ? ' · ' + app.syncLabel : '') : '';
+  if (footer) {
+    text(ctx, footer, 165, 367, { align: 'center', size: 10.5, color: 'rgba(37,74,64,0.72)', width: 322 });
+  }
   ctx.restore();
   return app.modal ? drawModal(ctx, app, layout) : hits;
 }
@@ -505,8 +509,9 @@ function drawModal(ctx, app, layout) {
     const artwork = box(r.x + 13, r.y + 52, r.w - 26, r.h - (kind === 'win' ? daily ? 172 : 147 : 101));
     rounded(ctx, artwork, 10, '#3c5647');
     poster(ctx, puzzle.level, app.imageFor(puzzle.level), artwork, puzzle.phase === 'stored');
-    const label = kind !== 'win' ? puzzle.level.story : daily ? '本次修复用时 ' + formatTime(app.daily.elapsed) :
-      last ? '本模式全部关卡已完成。' : '下一关已解锁。';
+    const label = (kind !== 'win' ? puzzle.level.story : daily ? '本次修复用时 ' + formatTime(app.daily.elapsed) :
+      last ? '本模式全部关卡已完成。' : '下一关已解锁。') +
+      (app.syncLabel ? '　·　' + app.syncLabel : '');
     text(ctx, label, r.x + 14, artwork.y + artwork.h + 21, { color: COLORS.note, width: r.w - 28 });
     if (kind === 'win') {
       const y = r.y + r.h - 49;

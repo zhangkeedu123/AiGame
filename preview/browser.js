@@ -88,6 +88,7 @@
     window.jinyaoPreview = window.startJinyao({
       canvas,
       fontFamily: fallback,
+      envHint: new URLSearchParams(location.search).get('env'),
       unlockAudio,
       createSound,
       windowInfo() {
@@ -98,7 +99,23 @@
         const image = new Image();
         image.onload = () => ready(image);
         image.onerror = () => failed(file);
-        image.src = '/' + file;
+        image.crossOrigin = 'anonymous';
+        image.src = /^https?:\/\//i.test(file) ? file : '/' + file;
+      },
+      request(options) {
+        const init = { method: options.method || 'GET', headers: options.header || {} };
+        if (options.data !== undefined && init.method !== 'GET') {
+          init.headers['Content-Type'] = init.headers['Content-Type'] || 'application/json';
+          init.body = typeof options.data === 'string' ? options.data : JSON.stringify(options.data);
+        }
+        fetch(options.url, init).then(async response => {
+          const text = await response.text();
+          let data = text;
+          try { data = text ? JSON.parse(text) : null; } catch (_) { /* 保留原始文本 */ }
+          if (options.success) options.success({ statusCode: response.status, data });
+        }).catch(error => {
+          if (options.fail) options.fail({ errMsg: error.message || '网络请求失败' });
+        });
       },
       async share(content, notice) {
         try {
