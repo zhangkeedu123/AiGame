@@ -8,7 +8,8 @@ const root = path.resolve(__dirname, '..');
 const source = path.join(root, 'src');
 const preview = path.join(root, 'preview');
 const port = process.argv[2] === undefined ? 4173 : Number(process.argv[2]);
-const host = '127.0.0.1';
+// 第二个参数传 0.0.0.0 可让同一局域网的手机访问；默认只监听本机。
+const host = process.argv[3] === undefined ? '127.0.0.1' : process.argv[3];
 
 function moduleId(file) {
   return path.relative(source, file).split(path.sep).join('/');

@@ -33,3 +33,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 早期重复克隆留下的嵌套仓库（不要提交）
+/AiGame/
