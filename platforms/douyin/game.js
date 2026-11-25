@@ -1,4 +1,5 @@
 'use strict';
 const { createPlatform } = require('./platform/mini-game.js');
 const { adUnitId } = require('./platform/reward-config.js');
-require('./main.js').start(createPlatform(tt, adUnitId));
+const { apiUrl, env } = require('./platform/online-config.js');
+require('./main.js').start(createPlatform(tt, adUnitId, apiUrl, env));

@@ -5,7 +5,7 @@ function optional(api, name) {
   catch (_) { return null; }
 }
 
-function createPlatform(api, adUnitId) {
+function createPlatform(api, adUnitId, apiUrl, env) {
   const canvas = api.createCanvas();
   let fontFamily = '';
   try { if (typeof api.loadFont === 'function') fontFamily = api.loadFont('assets/jinyao-ui.ttf') || ''; }
@@ -94,13 +94,11 @@ function createPlatform(api, adUnitId) {
 
   function loadImage(path, success, failure) {
     let fallback = false;
-    // 后台图集是 http(s) 绝对地址，小程序里不能走 readFileSync 兜底。
-    const remote = /^https?:\/\//i.test(path);
     function attempt(src) {
       const image = api.createImage();
       function ready() { success(image); }
       function failed() {
-        if (fallback || remote) { failure(path); return; }
+        if (fallback) { failure(path); return; }
         fallback = true;
         try {
           fs = fs || optional(api, 'getFileSystemManager');
@@ -122,7 +120,42 @@ function createPlatform(api, adUnitId) {
     try { attempt(path); } catch (_) { failure(path); }
   }
 
+  const online = apiUrl && typeof api.request === 'function' ? {
+    onlineUrl: path => apiUrl + path,
+    onlineRequest(path, { method = 'GET', token, body } = {}) {
+      return new Promise((resolve, reject) => api.request({
+        url: apiUrl + path, method, data: body,
+        header: token ? { Authorization: 'Bearer ' + token } : {},
+        success: response => {
+          if (response.statusCode >= 200 && response.statusCode < 300) { resolve(response.data); return; }
+          const error = new Error('HTTP ' + response.statusCode);
+          error.status = response.statusCode;
+          reject(error);
+        },
+        fail: reject,
+      }));
+    },
+    askToken() {
+      return new Promise(resolve => {
+        if (!api.showKeyboard || !api.onKeyboardConfirm || !api.offKeyboardConfirm ||
+            !api.onKeyboardComplete || !api.offKeyboardComplete) { resolve(''); return; }
+        const finish = value => {
+          api.offKeyboardConfirm(confirm);
+          api.offKeyboardComplete(cancel);
+          resolve(value);
+        };
+        const confirm = result => finish(result.value || '');
+        const cancel = () => finish('');
+        api.onKeyboardConfirm(confirm);
+        api.onKeyboardComplete(cancel);
+        api.showKeyboard({ defaultValue: '', maxLength: 128, multiple: false,
+          confirmHold: false, confirmType: 'done', fail: cancel });
+      });
+    },
+  } : {};
   return {
+    ...online,
+    onlineEnv: online.onlineUrl ? (env || '') : '',
     canvas,
     fontFamily,
     windowInfo() {
@@ -164,30 +197,6 @@ function createPlatform(api, adUnitId) {
     onResize(listener) { bind('onWindowResize', listener); },
     onShow(listener) { bind('onShow', listener); },
     onHide(listener) { bind('onHide', listener); },
-    request(options) {
-      if (typeof api.request !== 'function') {
-        if (options.fail) options.fail({ errMsg: '当前环境不支持网络请求' });
-        return;
-      }
-      try {
-        api.request({
-          url: options.url,
-          method: options.method || 'GET',
-          header: options.header || {},
-          data: options.data,
-          timeout: options.timeout || 12000,
-          dataType: 'json',
-          success(response) {
-            if (options.success) options.success({ statusCode: response.statusCode, data: response.data });
-          },
-          fail(error) {
-            if (options.fail) options.fail(error || { errMsg: '网络请求失败' });
-          },
-        });
-      } catch (error) {
-        if (options.fail) options.fail(error);
-      }
-    },
     read(key) {
       try {
         const data = api.getStorageSync(key);

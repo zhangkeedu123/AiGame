@@ -1,4 +1,9 @@
 {
+  "env": "dev",
+  "apiUrls": {
+    "dev": "http://127.0.0.1:8000",
+    "master": "https://你的服务器域名"
+  },
   "wechat": "",
   "douyin": "",
   "rewardedAds": {

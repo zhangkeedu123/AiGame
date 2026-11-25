@@ -5,8 +5,13 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "build": "node scripts/build.js",
+    "build:dev": "node scripts/build.js --env dev",
+    "build:master": "node scripts/build.js --env master",
     "build:wechat": "node scripts/build.js wechat",
     "build:douyin": "node scripts/build.js douyin",
+    "preview": "node scripts/preview.js",
+    "preview:dev": "node scripts/preview.js --env dev",
+    "preview:master": "node scripts/preview.js --env master",
     "check": "node scripts/check.js"
   }
 }

@@ -3,13 +3,26 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readLocalConfig, describe } = require('./api-origin.js');
 
 const root = path.resolve(__dirname, '..');
 const source = path.join(root, 'src');
 const preview = path.join(root, 'preview');
-const port = process.argv[2] === undefined ? 4173 : Number(process.argv[2]);
+const argv = process.argv.slice(2);
+const envFlag = argv.indexOf('--env');
+const envArg = envFlag >= 0 ? (argv[envFlag + 1] || '') : '';
+const rest = argv.filter((item, index) => !item.startsWith('--') && (envFlag < 0 || index !== envFlag + 1));
+const port = rest[0] === undefined ? 4173 : Number(rest[0]);
 // 第二个参数传 0.0.0.0 可让同一局域网的手机访问；默认只监听本机。
-const host = process.argv[3] === undefined ? '127.0.0.1' : process.argv[3];
+const host = rest[1] === undefined ? '127.0.0.1' : rest[1];
+const backend = describe(readLocalConfig(root), envArg);
+const apiOrigin = backend.apiUrl;
+
+function originFor(name) {
+  if (!name) return apiOrigin;
+  const hit = backend.envs.find(item => item.name === name);
+  return hit ? hit.apiUrl : '';
+}
 
 function moduleId(file) {
   return path.relative(source, file).split(path.sep).join('/');
@@ -76,9 +89,36 @@ function answer(response, status, type, content) {
   response.end(content);
 }
 
-const server = http.createServer((request, response) => {
+const server = http.createServer(async (request, response) => {
   try {
-    const pathname = new URL(request.url, 'http://' + host).pathname;
+    const url = new URL(request.url, 'http://' + host);
+    const pathname = url.pathname;
+    if (pathname === '/online-enabled') {
+      answer(response, 200, 'application/json', JSON.stringify({
+        enabled: Boolean(originFor(url.searchParams.get('env')) || apiOrigin),
+        env: backend.name,
+        label: backend.label,
+        apiUrl: originFor(url.searchParams.get('env')) || apiOrigin,
+        envs: backend.envs,
+      }));
+      return;
+    }
+    if (/^\/online\/api\/v1\/(levels(?:\/[a-f0-9-]{36}(?:\/atlas\.png)?)?|me|me\/(?:guest|login|progress(?:\/[a-f0-9-]{36})?))$/.test(pathname)) {
+      const origin = originFor(url.searchParams.get('env'));
+      if (!origin) {
+        answer(response, 503, 'application/json', JSON.stringify({ detail: '该环境未配置后台地址' }));
+        return;
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (request.headers.authorization) headers.Authorization = request.headers.authorization;
+      const upstream = await fetch(new URL(pathname.slice(7), origin), {
+        method: request.method, headers, redirect: 'error', signal: AbortSignal.timeout(15000),
+        ...(['PUT', 'POST', 'PATCH'].includes(request.method) ? { body: request, duplex: 'half' } : {}),
+      });
+      answer(response, upstream.status, upstream.headers.get('content-type') || 'application/octet-stream',
+        Buffer.from(await upstream.arrayBuffer()));
+      return;
+    }
     if (pathname === '/preview/game.js') {
       answer(response, 200, 'text/javascript; charset=utf-8', bundle());
       return;
@@ -110,6 +150,9 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   });
   server.listen(port, host, () => {
     console.log('金缮夜馆预览  http://' + host + ':' + port);
+    console.log('后台环境 ' + backend.name + '（' + backend.label + '）→ ' + (apiOrigin || '未配置'));
+    console.log('页面右上角可切换 ' + backend.envs.map(item => item.name).join(' / ') +
+      '；也可以直接访问 ?env=master。');
     console.log('保存 src 中的修改后刷新浏览器。按 Ctrl+C 停止预览。');
   });
 }

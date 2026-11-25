@@ -19,9 +19,29 @@
 | 微信小游戏 | `dist/wechat/` | 打开微信开发者工具，导入小游戏目录，选择你的微信小游戏 AppID，然后点「编译」。开发者工具如果提供测试号选项，可以用它做本地模拟器调试。 |
 | 抖音小游戏 | `dist/douyin/` | 打开抖音开发者工具，在小游戏项目列表中导入或关联该目录，填入抖音小游戏 AppID，然后点「编译」。如果导入需要先设置项目类型，选择「小游戏」。 |
 
-真机扫码预览需要在对应开发者工具里登录有项目权限的账号，并使用对应平台的小游戏 AppID。导入目录的根部能直接看到 `game.js` 和 `game.json`。两份工程都带有本地 PNG 资源，游戏运行无需接后端。
+真机扫码预览需要在对应开发者工具里登录有项目权限的账号，并使用对应平台的小游戏 AppID。导入目录的根部能直接看到 `game.js` 和 `game.json`。关卡目录、玩家身份和拼图存档都来自后台接口，包内的 PNG 与六关数据只在后台连不上时作离线兜底，首页会标注「离线兜底」。
 
 [微信开发者工具下载](https://developers.weixin.qq.com/miniprogram/dev/devtools/download.html) · [抖音开发者工具下载](https://developer.open-douyin.com/docs/resource/zh-CN/mini-game/develop/dev-tools/developer-instrument-update-and-download) · [抖音小游戏新手教程](https://developer.open-douyin.com/docs/resource/zh-CN/mini-game/develop/guide/dev-guide/newbie-tutorial)
+
+## 2. 后台环境（dev / master）
+
+前端只有一份源码，靠 `appids.local.json` 决定连哪套后台：
+
+| 环境 | 指向 | 构建命令 |
+| --- | --- | --- |
+| `dev` | 本机 AiGameApi（`http://127.0.0.1:8000`） | `node scripts/build.js --env dev` 或 `npm run build:dev` |
+| `master` | 服务器已发布接口 | `node scripts/build.js --env master` 或 `npm run build:master` |
+
+不带 `--env` 时用 JSON 里的 `env`。构建会把选中的地址写进 `dist/*/platform/online-config.js`，游戏运行时按下面的顺序取数据，全部走 HTTP，本地不再有第二套数据源：
+
+| 数据 | 接口 | 说明 |
+| --- | --- | --- |
+| 玩家身份 | `POST /api/v1/me/guest` | 设备号换令牌，令牌按环境分开存，换环境不会串号 |
+| 关卡目录 | `GET /api/v1/levels` + `GET /api/v1/levels/{id}` | 只取后台已发布、未归档的关卡；每日一瓷、三种模式的关卡都从这份目录派生 |
+| 图集 | `GET /api/v1/levels/{id}/atlas.png` | 碎片贴图直接用后台图集，换图不用重新发版 |
+| 进度存档 | `GET/PUT /api/v1/me/progress/{level_id}` | 带 `revision` 乐观锁，409 自动重读再写；跨设备可续玩 |
+
+浏览器预览默认用 JSON 里的 `env`，顶栏下拉框可以实时切到另一套：`node scripts/preview.js --env dev`。
 
 ## 2. 用 VS Code 里的 Codex 开发
 
@@ -36,11 +56,12 @@
 本地命令都从根目录运行，无需执行 npm install。
 
 ```powershell
-node scripts/build.js
+node scripts/build.js --env master   # 或 npm run build:master，出线上包
+node scripts/build.js --env dev      # 或 npm run build:dev，连本机后端
 node scripts/check.js
 ```
 
-只生成一端时使用 `node scripts/build.js wechat` 或 `node scripts/build.js douyin`。若使用 IDE 编辑了输出目录的 `project.config.json`，构建脚本会保留已有 AppID。也可以复制 `appids.example.json` 为 `appids.local.json` 并填入两端各自的 AppID，之后构建会优先使用它。
+只生成一端时使用 `node scripts/build.js wechat` 或 `node scripts/build.js douyin`（可同时带 `--env`）。若使用 IDE 编辑了输出目录的 `project.config.json`，构建脚本会保留已有 AppID。也可以复制 `appids.example.json` 为 `appids.local.json` 并填入两端各自的 AppID 与两套后台地址，之后构建会优先使用它。
 
 激励视频使用各平台官网分配的广告位。在 `appids.local.json` 的 `rewardedAds.wechat` 和 `rewardedAds.douyin` 填入对应广告位 ID 后重新构建。浏览器预览或未配置广告位的包会显示暂不可用提示，仍可重开。
 
