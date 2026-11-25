@@ -12,9 +12,11 @@ const argv = process.argv.slice(2);
 const envFlag = argv.indexOf('--env');
 const envArg = envFlag >= 0 ? (argv[envFlag + 1] || '') : '';
 const rest = argv.filter((item, index) => !item.startsWith('--') && (envFlag < 0 || index !== envFlag + 1));
-const port = rest[0] === undefined ? 4173 : Number(rest[0]);
-// 第二个参数传 0.0.0.0 可让同一局域网的手机访问；默认只监听本机。
-const host = rest[1] === undefined ? '127.0.0.1' : rest[1];
+// 端口与监听地址：命令行优先，其次 PORT / HOST 环境变量（部署时由平台注入）。
+// 给了 PORT 说明跑在托管环境里，默认监听 0.0.0.0；本机运行默认只听 127.0.0.1。
+const deployed = Boolean(process.env.PORT);
+const port = rest[0] === undefined ? Number(process.env.PORT || 4173) : Number(rest[0]);
+const host = rest[1] || process.env.HOST || (deployed ? '0.0.0.0' : '127.0.0.1');
 // 走 dev 还是 master 由 appids.local.json 的 env 决定（可用 --env 临时覆盖），
 // 页面上不再提供切换入口。
 const backend = describe(readLocalConfig(root), envArg);
@@ -104,7 +106,10 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const headers = { 'Content-Type': 'application/json' };
-      if (request.headers.authorization) headers.Authorization = request.headers.authorization;
+      // 托管环境的网关会丢掉 Authorization，浏览器改用 X-Player-Token 传令牌，
+      // 这里再还原成标准的 Bearer 头发给后台。
+      const token = request.headers['x-player-token'] || request.headers.authorization;
+      if (token) headers.Authorization = String(token).startsWith('Bearer ') ? token : 'Bearer ' + token;
       const upstream = await fetch(new URL(pathname.slice(7) + url.search, apiOrigin), {
         method: request.method, headers, redirect: 'error', signal: AbortSignal.timeout(15000),
         ...(['PUT', 'POST', 'PATCH'].includes(request.method) ? { body: request, duplex: 'half' } : {}),

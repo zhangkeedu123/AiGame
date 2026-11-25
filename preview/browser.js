@@ -96,7 +96,8 @@
         onlineUrl: path => '/online' + path,
         async onlineRequest(path, { method = 'GET', token, body } = {}) {
           const headers = { 'Content-Type': 'application/json' };
-          if (token) headers.Authorization = 'Bearer ' + token;
+          // 不用 Authorization：托管网关会把它剥掉，改用自定义头，由预览服务转成 Bearer。
+          if (token) headers['X-Player-Token'] = token;
           const response = await fetch('/online' + path, { method, headers, body: body && JSON.stringify(body) });
           if (!response.ok) {
             const error = new Error('HTTP ' + response.status);

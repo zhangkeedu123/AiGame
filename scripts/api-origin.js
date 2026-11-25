@@ -52,11 +52,13 @@ function originOf(raw, name) {
 }
 
 // 解析环境：name 省略时用配置里的 env，再缺省为 dev。
+// API_ORIGIN 环境变量可强制指定地址（部署时用，仓库里不放本机配置）。
 // 该环境没配地址时 apiUrl='' ，表示这个环境不接后台。
 function resolveEnv(config, name) {
   const urls = envMap(config);
   const env = ENVS[name] ? name : defaultEnv(config);
-  const raw = urls[env];
+  const forced = (process.env.API_ORIGIN || '').trim();
+  const raw = forced || urls[env];
   const apiUrl = typeof raw === 'string' && raw.trim() ? originOf(raw.trim(), env) : '';
   return { env, label: ENVS[env].label, hint: ENVS[env].hint, apiUrl, urls };
 }

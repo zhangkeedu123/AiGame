@@ -12,6 +12,7 @@
     "preview": "node scripts/preview.js",
     "preview:dev": "node scripts/preview.js --env dev",
     "preview:master": "node scripts/preview.js --env master",
+    "share": "node scripts/serve-share.js",
     "check": "node scripts/check.js"
   }
 }

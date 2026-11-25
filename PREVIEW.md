@@ -27,6 +27,18 @@ node scripts/preview.js
 
 预览会从当前 `src/main.js` 加载同一套玩法和 Canvas 界面。修改后保存文件，按 Ctrl+R 刷新即可。按 F12 查看 Console 报错。需要回到第一关时，可以用页面上的「清除预览存档」。网页预览使用本机浏览器存储，微信存档由微信运行时处理。终端里按 Ctrl+C 可以停止服务。
 
+## 让手机试玩
+
+同一局域网里最省事的方式：
+
+```powershell
+npm run share
+```
+
+它固定连线上后台、监听 `0.0.0.0:4173`，手机浏览器打开 `http://电脑局域网IP:4173` 就能玩。要发给不在同一网络的朋友，用 WorkBuddy 的「发布应用」把这个目录发成公开链接即可，链接里点开就是这套页面。
+
+部署环境只给一个 `PORT`、并要求监听 `0.0.0.0`，这两个都由 `scripts/serve-share.js` 处理好；后台地址用 `API_ORIGIN` 固定，仓库里不放 `appids.local.json` 也能跑。浏览器访问本站的 `/online/*`，由服务端代理到后台，所以线上是 HTTPS 也不会被混合内容拦。令牌走 `X-Player-Token` 头再转成 `Authorization`，因为托管网关会把 `Authorization` 剥掉。
+
 给 Codex 的示例任务：
 
 > 先读 AGENTS.md 和 PREVIEW.md。用 node scripts/preview.js 启动本地预览，打开浏览器核验。拖动碎片，检查碎片序号、错片叠放不吸附、正确裂边吸附、整组拖动、刷新恢复和拼齐后直接解锁下一关。发现问题先修 src 中的共享源码并回归，最后执行 node scripts/build.js 和 node scripts/check.js。告诉我浏览器里实际验证了什么，以及微信模拟器还应验证什么。
