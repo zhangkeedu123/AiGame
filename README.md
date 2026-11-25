@@ -41,7 +41,7 @@
 | 图集 | `GET /api/v1/levels/{id}/atlas.png` | 碎片贴图直接用后台图集，换图不用重新发版 |
 | 进度存档 | `GET/PUT /api/v1/me/progress/{level_id}` | 带 `revision` 乐观锁，409 自动重读再写；跨设备可续玩 |
 
-浏览器预览默认用 JSON 里的 `env`，顶栏下拉框可以实时切到另一套：`node scripts/preview.js --env dev`。
+浏览器预览也读同一份 JSON 的 `env`，页面里**不提供环境切换**：改 `appids.local.json` 的 `"env"` 为 `dev` 或 `master`，重启预览（或重新构建）即可。需要临时切一次而不改文件时，可以用 `node scripts/preview.js --env dev`。
 
 ## 2. 用 VS Code 里的 Codex 开发
 

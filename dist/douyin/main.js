@@ -81,20 +81,14 @@ class Game {
     await this.connect();
   }
 
-  envTag() {
-    const env = this.platform.onlineEnv;
-    return env ? env + ' · ' : '';
-  }
-
   async connect() {
     if (this.connecting) return;
     this.connecting = true;
-    const tag = this.envTag();
     try {
       try {
         this.player = await this.online.ensurePlayer();
       } catch (error) {
-        this.setStatus(tag + '后台连接失败 · 离线兜底（' + error.message + '）');
+        this.setStatus('后台连接失败 · 离线兜底（' + error.message + '）');
         return;
       }
       try {
@@ -104,13 +98,13 @@ class Game {
           levels.splice(0, levels.length, ...list);
           this.textures.clear();
           this.edition = dailyEdition(Date.now(), levels.length);
-          const nickname = this.player && this.player.nickname;
-          this.setStatus(tag + '后台关卡 ' + list.length + ' 关' + (nickname ? ' · ' + nickname : ''));
+          // 正常连上后台时不显示任何环境或关卡数量，避免把内部信息暴露给玩家。
+          this.setStatus('');
         } else {
-          this.setStatus(tag + '后台还没有已发布关卡 · 离线兜底');
+          this.setStatus('后台还没有已发布关卡 · 离线兜底');
         }
       } catch (error) {
-        this.setStatus(tag + '关卡读取失败 · 离线兜底（' + error.message + '）');
+        this.setStatus('关卡读取失败 · 离线兜底（' + error.message + '）');
       }
       try {
         this.remoteProgress = await this.online.progress();

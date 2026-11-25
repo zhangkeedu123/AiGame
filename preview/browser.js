@@ -46,34 +46,6 @@
     errorBox.textContent = '预览启动失败。请检查浏览器 Console 和启动预览的终端。\n' + (error.message || error);
   }
 
-  // 顶栏环境切换：dev = 本机 API，master = 服务器已发布接口。
-  function mountEnvSwitch(envs, current) {
-    const header = document.querySelector('header');
-    if (!header) return;
-    const box = document.createElement('div');
-    box.className = 'env';
-    const label = document.createElement('span');
-    label.textContent = '后台';
-    const select = document.createElement('select');
-    select.setAttribute('aria-label', '切换后台环境');
-    for (const item of envs) {
-      const option = document.createElement('option');
-      option.value = item.name;
-      option.textContent = item.name + ' · ' + item.label;
-      option.title = item.apiUrl;
-      if (current && item.name === current.name) option.selected = true;
-      select.append(option);
-    }
-    select.addEventListener('change', () => {
-      const url = new URL(window.location.href);
-      url.searchParams.set('env', select.value);
-      window.location.href = url.toString();
-    });
-    box.append(label, select);
-    header.insertBefore(box, header.firstChild);
-    document.title = '金缮夜馆 · 本地预览 · ' + (current ? current.name : '离线');
-  }
-
   function makeInput(listener) {
     let captured = null;
     function touch(event) {
@@ -113,25 +85,19 @@
       fallback = 'Jinyao UI';
     } catch (_) { /* Use the system font if the game font is unavailable. */ }
 
+    // 后台地址由启动预览时读取 appids.local.json 决定，页面上不做环境切换。
     const online = await fetch('/online-enabled').then(response => response.json())
-      .catch(() => ({ enabled: false, envs: [] }));
-    const available = Array.isArray(online.envs) ? online.envs.filter(item => item.apiUrl) : [];
-    const hinted = new URLSearchParams(window.location.search).get('env');
-    const current = available.find(item => item.name === hinted) ||
-      available.find(item => item.name === online.env) || available[0] || null;
-    const env = current ? current.name : '';
-    if (available.length) mountEnvSwitch(available, current);
+      .catch(() => ({ enabled: false }));
+    const env = online.enabled && online.env ? online.env : '';
 
     window.jinyaoPreview = window.startJinyao({
       ...(env ? {
         onlineEnv: env,
-        onlineUrl: path => '/online' + path + '?env=' + encodeURIComponent(env),
-        askToken: () => window.prompt('请输入管理员签发的玩家令牌') || '',
+        onlineUrl: path => '/online' + path,
         async onlineRequest(path, { method = 'GET', token, body } = {}) {
           const headers = { 'Content-Type': 'application/json' };
           if (token) headers.Authorization = 'Bearer ' + token;
-          const query = '?env=' + encodeURIComponent(env);
-          const response = await fetch('/online' + path + query, { method, headers, body: body && JSON.stringify(body) });
+          const response = await fetch('/online' + path, { method, headers, body: body && JSON.stringify(body) });
           if (!response.ok) {
             const error = new Error('HTTP ' + response.status);
             error.status = response.status;
