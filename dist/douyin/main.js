@@ -1,44 +1,38 @@
 'use strict';
 
-const levels = require('./core/levels.js');
-const { Puzzle, groupBounds } = require('./core/puzzle.js');
+const { Puzzle, WIDTH, HEIGHT, SCALE, groupBounds } = require('./core/puzzle.js');
 const { contains, computeLayout, draw, OPENING_DURATION, OPENING_BREAK } = require('./core/view.js');
 const { GameAudio } = require('./core/audio.js');
 const { Online } = require('./core/online.js');
-const { dailyEdition, dailyRandom, formatTime } = require('./core/daily.js');
-const { modes } = require('./core/modes.js');
+const { Collection, shippingFields } = require('./core/collection.js');
+const { dailyRandom, formatTime } = require('./core/daily.js');
+const modes = require('./core/modes.js');
 
-const MODES_KEY = 'jinyao-modes-v1';
 const DAILY_KEY = 'jinyao-daily-v1';
-const BONUS_MS = 60000;
 
 class Game {
   constructor(platform) {
     this.platform = platform;
     this.audio = new GameAudio(platform);
     this.online = platform.onlineRequest ? new Online(platform) : null;
-    this.remoteProgress = {};
-    this.remoteReady = false;
-    this.remoteSyncing = false;
+    this.collection = new Collection(platform, this.online);
+    this.remoteLevels = [];
     this.connecting = false;
     this.canvas = platform.canvas;
     this.fontFamily = platform.fontFamily || '';
     this.ctx = this.canvas.getContext('2d');
     if (!this.ctx) throw new Error('金缮夜馆需要 Canvas 2D');
-    this.levels = levels;
     this.modes = modes;
-    this.modeBooks = platform.read(MODES_KEY) || {};
+    this.completed = new Set();
+    this.ranking = { page: 0 };
     this.puzzle = null;
     this.screen = 'home';
     const daily = platform.read(DAILY_KEY) || {};
     this.daily = daily.current || null;
-    this.records = Array.isArray(daily.records) ? daily.records : [];
-    this.edition = dailyEdition(Date.now(), levels.length);
-    this.dailySince = null;
+    this.records = Array.isArray(daily.records) ? daily.records.filter(record => record && typeof record.date === 'string') : [];
     this.clockSince = null;
     this.clockTimer = null;
     this.visible = true;
-    this.watching = false;
     this.homeNotice = '';
     this.shareNotice = '';
     this.textures = new Map();
@@ -53,9 +47,7 @@ class Game {
     platform.onShow(() => {
       this.visible = true;
       this.audio.setForeground(true);
-      if (this.screen === 'home') this.edition = dailyEdition(Date.now(), this.unlockedCount());
-      // 上次没连上后台（启动时断网/接口重启）：回到前台再试一次。
-      if (this.online && !this.remoteReady && this.screen === 'home') this.connect();
+      if (this.online && this.screen === 'home') this.connect();
       this.resumeClock();
       this.resize();
     });
@@ -66,76 +58,162 @@ class Game {
       this.pauseClock();
       this.cancel();
       this.save();
-      this.dailySince = null;
     });
-    this.boot();
+    this.connect();
   }
 
-  // 启动流程：身份 → 关卡目录 → 后台存档。关卡与存档都以后台为准，
-  // 只有后台连不上时才退回本机素材，并在首页明确标注「离线兜底」。
-  async boot() {
+  connect() {
+    if (this.connecting) return this.connecting;
     if (!this.online) {
-      this.setStatus('当前环境不支持网络 · 使用本机关卡');
-      return;
+      this.setStatus('连接服务后即可开始修复。');
+      return Promise.resolve();
     }
-    await this.connect();
+    const update = async () => {
+      try {
+        const [player, list] = await Promise.all([this.online.ensurePlayer(), this.online.catalog()]);
+        this.playerKey = this.online.deviceKey + ':' + player.id;
+        this.modePositions = this.platform.read(this.campaignPositionsKey()) || {};
+        await this.flushScores();
+        const progress = await this.online.request('/me/campaign');
+        this.completed = new Set(progress.completed);
+        this.remoteLevels = list;
+        this.catalogUpdatedAt = Date.now();
+        this.setStatus(list.length ? '' : '馆藏关卡正在准备中，欢迎稍后再来。');
+      } catch (_) { this.setStatus('暂时无法连接，点选模式可重试。'); }
+    };
+    this.connecting = update().finally(() => { this.connecting = null; });
+    return this.connecting;
   }
 
-  async connect() {
-    if (this.connecting) return;
-    this.connecting = true;
+  modeLevels(mode) { return this.remoteLevels.filter(level => level.category === mode); }
+
+  modeEntry(mode) {
+    const levels = this.modeLevels(mode);
+    const lastOpened = levels.find(level => level.id === this.modePositions?.[mode]);
+    if (lastOpened) return lastOpened;
+    const next = levels.findIndex(level => !this.completed.has(level.id));
+    return next < 0 ? levels.at(-1) : levels[Math.max(0, next - 1)];
+  }
+
+  campaignKey(level) { return 'jinyao-board:' + this.playerKey + ':' + level.id + ':' + level.atlas_version; }
+
+  campaignPositionsKey() { return 'jinyao-mode-position:' + this.playerKey; }
+
+  completedBoard(level, elapsed = 0) {
+    return {
+      groups: [{
+        ids: Array.from({ length: level.realCount }, (_, id) => id),
+        x: (WIDTH - 400 * SCALE) / 2,
+        y: (HEIGHT - 450 * SCALE) / 2,
+        turn: 0,
+      }],
+      elapsed,
+    };
+  }
+
+  async prefetch(entry, retry = false) {
+    const level = await this.online.detail(entry);
+    if (retry && this.imageFailed(level)) this.textures.delete(level.image);
+    this.imageFor(level);
+    return level;
+  }
+
+  get nextLevel() { return this.campaignLevels?.[this.campaignIndex + 1]; }
+
+  async playCampaign(mode, entry, reset = false) {
+    if (!this.online || this.loadingLevel) return;
+    if (this.screen === 'campaign') this.pauseClock();
+    this.loadingLevel = true;
+    this.setStatus(this.screen === 'home' ? '正在取出瓷器…' : '');
+    const oldPuzzle = this.puzzle;
     try {
-      try {
-        this.player = await this.online.ensurePlayer();
-      } catch (error) {
-        this.setStatus('后台连接失败 · 离线兜底（' + error.message + '）');
-        return;
+      if (!entry && (!this.catalogUpdatedAt || Date.now() - this.catalogUpdatedAt > 60000)) await this.connect();
+      if (!this.playerKey) throw new Error('暂时无法连接，请重试。');
+      const levels = oldPuzzle ? this.campaignLevels : this.modeLevels(mode);
+      const selected = entry || this.modeEntry(mode);
+      if (!selected) throw new Error('这个模式暂未开放关卡。');
+      if (oldPuzzle?.phase === 'stored' && oldPuzzle.level.id !== selected.id) {
+        await this.flushScores();
+        if (!this.completed.has(oldPuzzle.level.id)) throw new Error('成绩尚未同步，请重试后继续。');
       }
-      try {
-        const list = await this.online.catalog();
-        if (list.length) {
-          // 原地替换：puzzle.js / modes.js / view.js 引用的是同一个数组。
-          levels.splice(0, levels.length, ...list);
-          this.textures.clear();
-          this.edition = dailyEdition(Date.now(), levels.length);
-          // 正常连上后台时不显示任何环境或关卡数量，避免把内部信息暴露给玩家。
-          this.setStatus('');
-        } else {
-          this.setStatus('后台还没有已发布关卡 · 离线兜底');
+      let detail = await this.prefetch(selected, true);
+      let saved = reset ? null : this.platform.read(this.campaignKey(detail));
+      let restored = saved ? new Puzzle(detail, saved) : null;
+      let attemptId = saved?.attemptId;
+      let timeKnown = saved?.timeKnown !== false;
+      if (!reset && this.completed.has(detail.id) && restored?.phase !== 'stored' && !saved?.replay) {
+        restored = new Puzzle(detail, this.completedBoard(detail));
+        attemptId = null;
+        timeKnown = false;
+      }
+      if (restored?.phase !== 'stored') {
+        const attempt = await this.online.startLevel(selected.id);
+        if (detail.atlas_version !== attempt.atlas_version) {
+          detail = await this.prefetch({ ...selected, atlas_version: attempt.atlas_version }, true);
+          if (detail.atlas_version !== attempt.atlas_version) {
+            this.catalogUpdatedAt = 0;
+            throw new Error('关卡正在更新，请稍后重试。');
+          }
+          saved = reset ? null : this.platform.read(this.campaignKey(detail));
+          restored = null;
         }
-      } catch (error) {
-        this.setStatus('关卡读取失败 · 离线兜底（' + error.message + '）');
+        attemptId = attempt.id;
+        if (!restored || saved?.attemptId !== attemptId) {
+          restored = new Puzzle(detail, saved?.attemptId === attemptId ? saved : null);
+        }
+        timeKnown = true;
       }
-      try {
-        this.remoteProgress = await this.online.progress();
-        this.remoteReady = true;
-      } catch (error) {
-        this.setStatus((this.statusText ? this.statusText + ' · ' : '') + '存档读取失败（' + error.message + '）');
+      if (this.puzzle !== oldPuzzle || (!oldPuzzle && this.modal)) return;
+      this.puzzle = restored;
+      this.attempt = attemptId;
+      this.campaignReplay = Boolean(reset || saved?.replay);
+      this.campaignTimeKnown = timeKnown;
+      this.campaignLevels = levels;
+      this.campaignIndex = levels.findIndex(level => level.id === selected.id);
+      this.screen = 'campaign';
+      this.modal = null;
+      this.scoreNotice = '';
+      this.modePositions[mode] = detail.id;
+      this.platform.write(this.campaignPositionsKey(), this.modePositions);
+      this.defaultMessage();
+      this.prepareBoard();
+      this.save();
+      if (this.puzzle.phase === 'stored' && this.attempt && !this.completed.has(detail.id)) this.queueScore();
+      if (this.nextLevel) this.prefetch(this.nextLevel).catch(() => {});
+    } catch (error) {
+      const message = error.message || '关卡暂时无法打开，请稍后重试。';
+      if (this.screen === 'home') this.homeNotice = message;
+      else if (oldPuzzle === this.puzzle) {
+        this.scoreNotice = message;
+        this.say(message, true);
+        if (oldPuzzle.phase === 'fit') this.resumeClock();
       }
-      if (this.remoteReady && this.screen === 'home') {
-        this.edition = dailyEdition(Date.now(), this.unlockedCount());
-      }
-      this.renderSoon();
     } finally {
-      this.connecting = false;
+      this.loadingLevel = false;
+      this.renderSoon();
     }
   }
 
-  // 后台按 sort_order 顺序解锁：每日一瓷只在已解锁的关卡里挑，避免存档被 403 拒掉。
-  unlockedCount() {
-    if (!this.remoteReady) return levels.length || 1;
-    let count = 1;
-    for (let i = 0; i < levels.length - 1; i++) {
-      const key = levels[i].remoteId || levels[i].id;
-      const item = this.remoteProgress[key];
-      if (item && item.completed) count = i + 2;
-      else break;
-    }
-    return Math.min(count, levels.length || 1);
+  async loadRanking(month) {
+    const ranking = this.ranking;
+    if (ranking.loading) return;
+    ranking.loading = true;
+    ranking.notice = '';
+    this.modal = 'ranking';
+    this.renderSoon();
+    try {
+      if (!this.online) throw new Error('offline');
+      Object.assign(ranking, await this.online.ranking(month), { page: 0 });
+    } catch (_) { ranking.notice = '月榜暂时无法读取，点此重试。'; }
+    finally { ranking.loading = false; this.renderSoon(); }
+  }
+
+  priorRankingMonth() {
+    const [year, month] = (this.ranking.current_month || '').split('-').map(Number);
+    return year ? new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 7) : undefined;
   }
 
   setStatus(text) {
-    this.statusText = text;
     this.homeNotice = text;
     this.renderSoon();
   }
@@ -143,8 +221,11 @@ class Game {
   defaultMessage() {
     const phase = this.puzzle.phase;
     this.say(phase === 'fit' ? '拖动碎片，让相邻裂边贴合。'
-      : this.screen === 'daily' ? '本次修复用时 ' + formatTime(this.daily.elapsed) : '瓷器已收入藏品柜。');
+      : !this.hasElapsedRecord ? '已修复 · 通关记录已保存'
+      : '修复完成 · 用时 ' + formatTime(this.puzzle.state.elapsed));
   }
+
+  get hasElapsedRecord() { return this.screen !== 'campaign' || this.campaignTimeKnown !== false; }
 
   say(message, highlight) {
     this.message = message;
@@ -187,7 +268,7 @@ class Game {
   }
 
   advanceOpening() {
-    if (!this.opening || !this.visible || this.modal === 'settings' || !this.imageFor(this.puzzle.level)) return false;
+    if (!this.opening || !this.visible || !this.imageFor(this.puzzle.level)) return false;
     const now = Date.now();
     const previous = this.opening.elapsed;
     if (this.opening.since !== null) this.opening.elapsed += Math.max(0, now - this.opening.since);
@@ -204,8 +285,13 @@ class Game {
     if (!this.textures.has(path)) {
       const texture = { image: null, failed: false };
       this.textures.set(path, texture);
+      if (this.textures.size > 16) {
+        const protectedPaths = new Set([path, this.puzzle?.level.image, 'assets/home-shanshui.jpg']);
+        this.textures.delete([...this.textures.keys()].find(key => !protectedPaths.has(key)));
+      }
       this.platform.loadImage(path, image => {
         texture.image = image;
+        if (this.puzzle?.level.image === path) this.resumeClock();
         this.renderSoon();
       }, () => {
         texture.failed = true;
@@ -222,164 +308,161 @@ class Game {
 
   save() {
     if (this.screen === 'daily') {
-      this.updateDailyTime();
-      this.daily.book = this.puzzle.book;
+      this.daily.state = { ...this.puzzle.state, elapsed: this.elapsed() };
       this.platform.write(DAILY_KEY, { current: this.daily, records: this.records });
     } else if (this.screen === 'campaign') {
-      this.modeBooks[this.puzzle.mode] = this.puzzle.book;
-      this.platform.write(MODES_KEY, this.modeBooks);
-    } else if (this.screen === 'online') {
-      this.platform.write('jinyao-online-' + this.puzzle.level.id, this.puzzle.book);
+      this.platform.write(this.campaignKey(this.puzzle.level),
+        { ...this.puzzle.state, elapsed: this.elapsed(), attemptId: this.attempt,
+          replay: this.campaignReplay, timeKnown: this.campaignTimeKnown });
     }
   }
 
-  syncClock() {
-    if (this.clockSince === null) return;
-    const now = Date.now();
-    const state = this.puzzle.state;
-    state.remaining = Math.max(0, state.remaining - Math.max(0, now - this.clockSince));
-    this.clockSince = now;
-    if (state.remaining > 0) return;
-    this.pauseClock();
-    this.cancel();
-    this.modal = 'timeout';
-    this.adNotice = '';
-    this.audio.effect('timeout');
-    this.save();
-    this.renderSoon();
+  elapsed() {
+    return this.puzzle.state.elapsed + (this.clockSince === null ? 0 : Math.max(0, Date.now() - this.clockSince));
   }
 
   pauseClock() {
     if (this.clockTimer !== null) clearTimeout(this.clockTimer);
     this.clockTimer = null;
     if (this.clockSince === null) return;
-    const state = this.puzzle.state;
-    state.remaining = Math.max(0, state.remaining - Math.max(0, Date.now() - this.clockSince));
+    this.puzzle.state.elapsed = this.elapsed();
     this.clockSince = null;
-    if (this.screen === 'daily') {
-      this.updateDailyTime();
-      this.dailySince = null;
-    }
   }
 
   resumeClock() {
-    if (!this.visible || this.opening || this.modal === 'settings' || !this.puzzle ||
-        this.screen === 'home' || this.puzzle.phase === 'stored') return;
-    if (this.puzzle.state.remaining === 0) {
-      if (this.modal !== 'timeout') this.adNotice = '';
-      this.modal = 'timeout';
-      return;
-    }
-    if (this.clockSince !== null) return;
+    if (!this.visible || this.opening || !this.puzzle || this.puzzle.phase === 'stored' ||
+        this.clockSince !== null || !this.textures.get(this.puzzle.level.image)?.image) return;
     this.clockSince = Date.now();
-    if (this.screen === 'daily') this.dailySince = this.clockSince;
     this.scheduleClock();
   }
 
   scheduleClock() {
     this.clockTimer = setTimeout(() => {
       this.clockTimer = null;
-      this.syncClock();
-      if (this.clockSince !== null) this.scheduleClock();
-      this.renderSoon();
-    }, Math.min(1000, this.puzzle.state.remaining));
+      if (this.clockSince !== null) {
+        this.renderSoon();
+        this.scheduleClock();
+      }
+    }, 1000);
     if (this.clockTimer && typeof this.clockTimer.unref === 'function') this.clockTimer.unref();
   }
 
-  async watchForTime() {
-    if (this.watching || this.modal !== 'timeout') return;
-    if (typeof this.platform.rewardedVideo !== 'function') {
-      this.adNotice = '当前环境暂时无法播放广告';
-      this.renderSoon();
-      return;
-    }
-    this.watching = true;
-    this.adNotice = '';
-    this.renderSoon();
+  async startDaily() {
+    if (!this.online) { this.setStatus('请联网开启每日一瓷。'); return; }
+    if (this.loadingLevel) return;
+    this.loadingLevel = true;
+    this.setStatus('正在开启今日挑战…');
     try {
-      const watched = await this.platform.rewardedVideo();
-      if (watched) {
-        this.puzzle.state.remaining += BONUS_MS;
-        this.modal = null;
-        this.resumeClock();
-        this.save();
-      } else this.adNotice = '完整观看后可增加时间';
-    } catch (_) {
-      this.adNotice = '广告暂不可用，可以本关重开';
-    } finally {
-      this.watching = false;
-      this.renderSoon();
-    }
-  }
-
-  updateDailyTime() {
-    if (this.dailySince === null) return;
-    const now = Date.now();
-    this.daily.elapsed += Math.max(0, now - this.dailySince);
-    this.dailySince = this.puzzle.phase === 'stored' ? null : now;
+      await this.online.ensurePlayer();
+      const data = await this.online.request('/me/daily/start', { method: 'POST' });
+      if (!data.level) { this.setStatus('今日瓷器正在准备中，请稍后再来。'); return; }
+      if (this.screen !== 'home' || this.modal) return;
+      this.edition = { date: data.date, level: this.online.toLevel(data.level), playerId: this.collection.playerId,
+        completed: data.completed, elapsed: data.elapsed_ms, completedAt: data.completed_at };
+      this.openDaily();
+      this.homeNotice = '';
+    } catch (_) { this.homeNotice = '暂时无法连接每日一瓷，请重试。'; }
+    finally { this.loadingLevel = false; this.renderSoon(); }
   }
 
   openDaily(restart) {
     this.pauseClock();
-    const { date, day, index } = this.edition;
-    if (restart || !this.daily || this.daily.date !== date) this.daily = { date, elapsed: 0 };
-    this.puzzle = new Puzzle(this.daily.book, dailyRandom(day), index);
+    const { date, level, playerId } = this.edition;
+    if (restart || this.daily?.date !== date || this.daily.atlasVersion !== level.atlas_version ||
+        this.daily.playerId !== playerId) this.daily = { date, atlasVersion: level.atlas_version, playerId, replay: Boolean(restart) };
+    this.puzzle = new Puzzle(level, this.daily.state, dailyRandom(Date.parse(date) / 86400000));
+    if (!this.daily.replay && this.edition.completed && this.puzzle.phase !== 'stored') {
+      this.puzzle = new Puzzle(level, this.completedBoard(level, this.edition.elapsed));
+    }
     this.screen = 'daily';
     this.modal = null;
     this.shareNotice = '';
-    if (this.puzzle.phase === 'stored') this.recordDaily();
+    if (this.puzzle.phase === 'stored') {
+      this.recordDaily(this.edition.completedAt);
+      if (!this.edition.completed) this.syncDaily();
+    }
     this.defaultMessage();
     this.prepareBoard();
-    this.save();
-    this.restoreDailyFromRemote();
-  }
-
-  // 本机没有存档时，用后台上次保存的碎片位置接着拼。
-  restoreDailyFromRemote() {
-    const puzzle = this.puzzle;
-    if (!this.remoteReady || !puzzle || !puzzle.newBoard) return;
-    const item = puzzle.level.remoteId && this.remoteProgress[puzzle.level.remoteId];
-    if (!item || !Array.isArray(item.groups) || !item.groups.length) return;
-    if (!puzzle.adopt(item.groups)) return;
-    this.say('已从后台恢复上次进度。', true);
     this.save();
   }
 
   async syncDaily() {
     const puzzle = this.puzzle;
-    if (!this.online || !this.remoteReady || !puzzle || !puzzle.level.remoteId) return;
-    if (this.remoteSyncing) return;
-    this.remoteSyncing = true;
-    const levelId = puzzle.level.remoteId;
-    const previous = this.remoteProgress[levelId];
-    try {
-      const saved = await this.online.save(levelId, puzzle.state.groups, previous ? previous.revision : 0);
-      this.remoteProgress[levelId] = saved;
-      if (puzzle === this.puzzle) this.shareNotice = '进度已存入后台';
-    } catch (error) {
-      if (puzzle === this.puzzle) {
-        this.shareNotice = error.status === 403 ? '这关在后台还没解锁，成绩先存本机'
-          : '后台保存失败：' + error.message;
-      }
-    } finally {
-      this.remoteSyncing = false;
+    this.shareNotice = '正在同步今日藏品…';
+    const synced = await this.collection.submitDaily({
+      date: this.daily.date, group: puzzle.state.groups[0], elapsed_ms: Math.floor(puzzle.state.elapsed),
+    }, this.daily.playerId);
+    if (puzzle === this.puzzle) {
+      this.shareNotice = synced ? '已收入藏品阁，今日兑换额已记录' : '已存本机，可打开藏品阁重试同步';
       this.renderSoon();
     }
   }
 
-  recordDaily() {
-    this.updateDailyTime();
+  recordDaily(completedAt) {
+    const elapsed = this.puzzle.state.elapsed;
     const previous = this.records.find(record => record.date === this.daily.date);
-    if (!previous || this.daily.elapsed < previous.ms) {
+    if (!previous || elapsed < previous.ms) {
       this.records = this.records.filter(record => record.date !== this.daily.date);
-      this.records.push({ date: this.daily.date, index: this.puzzle.index, ms: this.daily.elapsed });
-      this.records.sort((a, b) => a.ms - b.ms || b.date.localeCompare(a.date));
+      const { name, image, poster } = this.puzzle.level;
+      this.records.push({ date: this.daily.date, name, image, poster, ms: elapsed,
+        completed_at: previous?.completed_at || completedAt });
+    } else if (!previous.completed_at && completedAt) {
+      previous.completed_at = completedAt;
     }
+  }
+
+  async openCollection() {
+    this.collectionReturn = this.modal === 'win' ? 'win' : null;
+    this.modal = 'collection';
+    this.collection.tab = 'items';
+    this.collection.page = 0;
+    this.collection.form = {};
+    this.collection.rewardMonth = null;
+    const refresh = this.collection.refresh();
+    this.renderSoon();
+    await refresh;
+    this.renderSoon();
+  }
+
+  async editShipping(key) {
+    const field = shippingFields.find(item => item[0] === key);
+    const c = this.collection;
+    if (!field || c.editing || c.submitting) return;
+    if (!this.platform.editText) {
+      c.notice = '当前设备无法输入地址，请在小游戏客户端填写。';
+      this.renderSoon();
+      return;
+    }
+    c.editing = true;
+    try {
+      const value = await this.platform.editText(field[1], c.form[key] || '', field[3]);
+      if (typeof value === 'string') c.form[key] = value.trim();
+      c.notice = '';
+    } catch (_) { c.notice = '暂时无法打开键盘，请重试。'; }
+    finally { c.editing = false; this.renderSoon(); }
+  }
+
+  async submitRedemption() {
+    const c = this.collection;
+    const eligible = c.rewardMonth ? c.awards.some(award => award.month.startsWith(c.rewardMonth)) : c.balance >= c.cost;
+    if (!this.platform.shippingAvailable || !c.ready || !eligible || c.editing || c.submitting) return;
+    c.submitting = true;
+    this.renderSoon();
+    const notice = await c.redeem();
+    c.submitting = false;
+    if (notice) c.notice = notice;
+    else {
+      c.notice = '兑换申请已提交，可在这里查看发货进度。';
+      c.tab = 'claims';
+      c.page = 0;
+      this.modal = 'collection';
+    }
+    this.renderSoon();
   }
 
   share() {
     const daily = this.screen === 'daily';
-    const time = daily ? formatTime(this.daily.elapsed) : '';
+    const time = daily ? formatTime(this.puzzle.state.elapsed) : '';
     const title = daily ? '金缮夜馆 ' + time : '金缮夜馆';
     const desc = daily ? this.puzzle.level.name + ' · 修复用时 ' + time : '一起来修复国风瓷器';
     const puzzle = this.puzzle;
@@ -411,9 +494,6 @@ class Game {
       if (!touch || (this.active && touch.id === this.active.id)) this.cancel();
       return;
     }
-    const wasTimedOut = this.modal === 'timeout';
-    this.syncClock();
-    if (!wasTimedOut && this.modal === 'timeout') return;
     if (kind === 'start') {
       if (touch && !this.active) this.start(touch);
       return;
@@ -504,60 +584,54 @@ class Game {
     this.pauseClock();
     this.modal = 'win';
     this.audio.effect('win');
-    if (this.screen === 'online') this.syncOnline();
-    if (this.screen === 'daily') { this.recordDaily(); this.syncDaily(); }
+    if (this.screen === 'daily') this.recordDaily(new Date(Date.now()).toISOString());
+    this.save();
+    if (this.screen === 'campaign') this.queueScore();
+    if (this.screen === 'daily') this.syncDaily();
     this.defaultMessage();
     this.highlightMessage = true;
   }
 
-  async syncOnline() {
+  queueScore() {
+    const key = 'jinyao-pending-scores:' + this.playerKey;
+    const pending = this.platform.read(key) || {};
     const puzzle = this.puzzle;
-    this.online.notice = '正在同步成绩';
-    let notice;
-    try { notice = await this.online.record(puzzle.level.id, puzzle.state.groups); }
-    catch (_) { notice = '本机已保存，线上同步失败'; }
-    if (puzzle === this.puzzle) {
-      this.online.notice = notice;
+    const attemptId = this.attempt;
+    pending[attemptId] = { levelId: puzzle.level.id, group: puzzle.state.groups[0],
+      elapsed_ms: Math.max(1, Math.floor(puzzle.state.elapsed)) };
+    this.platform.write(key, pending);
+    this.scoreNotice = '正在记录月榜成绩…';
+    this.flushScores().then(results => {
+      if (puzzle !== this.puzzle) return;
+      this.scoreNotice = results.get(attemptId) === true ? '成绩已记录到本月榜单' :
+        results.get(attemptId) === false ? '本次成绩无法登记，可重开关卡再试' : '成绩已存本机，可联网重试提交';
       this.renderSoon();
-    }
+    });
   }
 
-  async onlineAction(id) {
-    const online = this.online;
-    if (!online || online.loading) return;
-    this.modal = 'online';
-    online.loading = true;
-    online.notice = '';
-    this.renderSoon();
-    try {
-      if (id === 'online') await online.refresh();
-      else if (id === 'online-token') {
-        const token = (await this.platform.askToken()).trim();
-        if (token) {
-          await online.login(token);
-          online.notice = '已绑定：' + (online.player.nickname || '玩家');
+  flushScores() {
+    if (this.flushingScores) return this.flushingScores;
+    const key = 'jinyao-pending-scores:' + this.playerKey;
+    const flush = async () => {
+      const results = new Map();
+      const pending = this.platform.read(key) || {};
+      for (const [id, { levelId, ...proof }] of Object.entries(pending)) {
+        try {
+          await this.online.finishLevel(id, proof);
+          this.completed.add(levelId);
+          results.set(id, true);
+        } catch (error) {
+          if (![404, 422].includes(error.status)) continue;
+          results.set(id, false);
         }
-      } else {
-        const level = await online.detail(id.slice(13));
-        if (this.modal !== 'online') return;
-        this.puzzle = new Puzzle(this.platform.read('jinyao-online-' + level.id), null, undefined, undefined, level);
-        this.screen = 'online';
-        this.modal = null;
-        this.defaultMessage();
-        this.prepareBoard();
-        if (this.puzzle.phase === 'stored') this.syncOnline();
+        const current = this.platform.read(key) || {};
+        delete current[id];
+        this.platform.write(key, current);
       }
-    } catch (_) { online.notice = '连接失败，请检查服务或令牌'; }
-    finally { online.loading = false; this.renderSoon(); }
-  }
-
-  load(index, restart) {
-    this.pauseClock();
-    this.puzzle.load(index, restart);
-    this.modal = null;
-    this.defaultMessage();
-    this.prepareBoard();
-    this.save();
+      return results;
+    };
+    this.flushingScores = flush().finally(() => { this.flushingScores = null; });
+    return this.flushingScores;
   }
 
   action(id) {
@@ -568,25 +642,32 @@ class Game {
       this.screen = 'home';
       this.puzzle = null;
       this.opening = null;
-      this.edition = dailyEdition(Date.now(), this.unlockedCount());
-      this.dailySince = null;
       this.homeNotice = '';
       this.modal = null;
     } else if (id.startsWith('mode-')) {
-      const mode = id.slice(5);
-      this.puzzle = new Puzzle(this.modeBooks[mode], null, undefined, mode);
-      this.screen = 'campaign';
-      this.modal = null;
-      this.defaultMessage();
-      this.prepareBoard();
-      this.save();
+      this.playCampaign(id.slice(5));
     } else if (id === 'daily') {
-      this.edition = dailyEdition(Date.now(), this.unlockedCount());
-      this.openDaily(false);
-    } else if (id === 'online' || id === 'online-token' || id.startsWith('online-level-')) {
-      this.onlineAction(id);
-    } else if (id === 'online-prev' || id === 'online-next') {
-      this.online.page += id === 'online-prev' ? -1 : 1;
+      this.startDaily();
+    } else if (id === 'collection') {
+      this.openCollection();
+    } else if (id === 'collection-items' || id === 'collection-claims') {
+      this.collection.tab = id.slice(11);
+      this.collection.page = 0;
+    } else if (id === 'collection-prev' || id === 'collection-next') {
+      this.collection.page += id === 'collection-prev' ? -1 : 1;
+    } else if (id === 'redeem' || id === 'redeem-award') {
+      this.collection.rewardMonth = id === 'redeem-award' ? this.collection.awards[0]?.month.slice(0, 7) : null;
+      this.modal = 'redeem';
+      this.collection.notice = '';
+    } else if (id === 'redeem-back') {
+      this.collection.form = {};
+      this.collection.rewardMonth = null;
+      this.collection.notice = '';
+      this.modal = 'collection';
+    } else if (id === 'redeem-submit') {
+      this.submitRedemption();
+    } else if (id.startsWith('shipping-')) {
+      this.editShipping(id.slice(9));
     } else if (id === 'settings') {
       this.pauseClock();
       if (this.opening) this.opening.since = null;
@@ -594,12 +675,14 @@ class Game {
       this.save();
     } else if (id === 'toggle-music') this.audio.toggle('music');
     else if (id === 'toggle-effects') this.audio.toggle('effects');
-    else if (id === 'ranking') this.modal = 'ranking';
+    else if (id === 'ranking' || id === 'rank-current') this.loadRanking();
+    else if (id === 'rank-previous') this.loadRanking(this.priorRankingMonth());
+    else if (id === 'rank-prev' || id === 'rank-next') this.ranking.page += id === 'rank-prev' ? -1 : 1;
     else if (id === 'share') this.share();
     else if (id === 'reference') this.modal = 'reference';
     else if (id === 'close') {
       const settings = this.modal === 'settings';
-      this.modal = null;
+      this.modal = this.modal === 'collection' ? this.collectionReturn : null;
       if (settings) this.resumeClock();
     }
     else if (id === 'reset') this.modal = 'reset';
@@ -607,12 +690,11 @@ class Game {
       p.rearrange();
       this.say('桌面已重排', true);
       this.save();
-    } else if (id === 'ad-time') this.watchForTime();
-    else if (id === 'confirm-reset') {
+    } else if (id === 'confirm-reset') {
       if (this.screen === 'daily') this.openDaily(true);
-      else this.load(p.index, true);
+      else this.playCampaign(p.level.category, p.level, true);
     }
-    else if (id === 'next') this.load(p.index + 1);
+    else if (id === 'next' && this.nextLevel) this.playCampaign(p.level.category, this.nextLevel);
     else if (id === 'hint') {
       const near = p.findNeighbors();
       if (!near) return;
@@ -626,7 +708,6 @@ class Game {
       }
       this.save();
     } else if (id === 'retry') this.textures.delete(p.level.image);
-    else if (id.startsWith('level-')) this.load(Number(id.slice(6)));
     this.renderSoon();
   }
 }

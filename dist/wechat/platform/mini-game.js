@@ -5,7 +5,7 @@ function optional(api, name) {
   catch (_) { return null; }
 }
 
-function createPlatform(api, adUnitId, apiUrl, env) {
+function createPlatform(api, apiUrl, env, source) {
   const canvas = api.createCanvas();
   let fontFamily = '';
   try { if (typeof api.loadFont === 'function') fontFamily = api.loadFont('assets/jinyao-ui.ttf') || ''; }
@@ -36,39 +36,6 @@ function createPlatform(api, adUnitId, apiUrl, env) {
       };
     } catch (_) { return null; }
   }
-  let video;
-  let adRequest;
-
-  function settleAd(request, error, watched) {
-    if (!request || request !== adRequest) return;
-    adRequest = null;
-    if (error) request.reject(error);
-    else request.resolve(watched);
-  }
-
-  function rewardedVideo() {
-    return new Promise((resolve, reject) => {
-      if (adRequest) {
-        reject(new Error('Rewarded video is already active'));
-        return;
-      }
-      const request = { resolve, reject };
-      adRequest = request;
-      try {
-        if (!video) {
-          video = api.createRewardedVideoAd({ adUnitId });
-          video.onClose(result => settleAd(adRequest, null, result?.isEnded === true));
-          video.onError(error => settleAd(adRequest, error || new Error('Rewarded video failed')));
-        }
-        Promise.resolve(video.load())
-          .then(() => { if (adRequest === request) return video.show(); })
-          .catch(error => settleAd(request, error));
-      } catch (error) {
-        settleAd(request, error);
-      }
-    });
-  }
-
   function bind(name, listener) {
     if (typeof api[name] === 'function') api[name](listener);
   }
@@ -122,42 +89,50 @@ function createPlatform(api, adUnitId, apiUrl, env) {
 
   const online = apiUrl && typeof api.request === 'function' ? {
     onlineUrl: path => apiUrl + path,
+    shippingAvailable: /^https:\/\//i.test(apiUrl) || /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(apiUrl),
     onlineRequest(path, { method = 'GET', token, body } = {}) {
       return new Promise((resolve, reject) => api.request({
-        url: apiUrl + path, method, data: body,
+        url: apiUrl + path, method, data: body, timeout: 8000,
         header: token ? { Authorization: 'Bearer ' + token } : {},
         success: response => {
           if (response.statusCode >= 200 && response.statusCode < 300) { resolve(response.data); return; }
-          const error = new Error('HTTP ' + response.statusCode);
+          const error = new Error(typeof response.data?.detail === 'string' ? response.data.detail : '服务暂不可用，请重试。');
           error.status = response.statusCode;
           reject(error);
         },
-        fail: reject,
+        fail: () => reject(new Error('网络暂不可用，请重试。')),
       }));
     },
-    askToken() {
-      return new Promise(resolve => {
-        if (!api.showKeyboard || !api.onKeyboardConfirm || !api.offKeyboardConfirm ||
-            !api.onKeyboardComplete || !api.offKeyboardComplete) { resolve(''); return; }
-        const finish = value => {
-          api.offKeyboardConfirm(confirm);
-          api.offKeyboardComplete(cancel);
-          resolve(value);
-        };
-        const confirm = result => finish(result.value || '');
-        const cancel = () => finish('');
-        api.onKeyboardConfirm(confirm);
-        api.onKeyboardComplete(cancel);
-        api.showKeyboard({ defaultValue: '', maxLength: 128, multiple: false,
-          confirmHold: false, confirmType: 'done', fail: cancel });
-      });
-    },
   } : {};
+
+  function editText(_label, value, maxLength) {
+    return new Promise((resolve, reject) => {
+      if (!api.showKeyboard || !api.onKeyboardComplete || !api.offKeyboardComplete) {
+        reject(new Error('Keyboard unavailable'));
+        return;
+      }
+      const done = result => {
+        api.offKeyboardComplete(done);
+        resolve(result?.value);
+      };
+      const failed = error => {
+        api.offKeyboardComplete(done);
+        reject(error);
+      };
+      api.onKeyboardComplete(done);
+      try {
+        api.showKeyboard({ defaultValue: value, maxLength, multiple: false,
+          confirmHold: false, confirmType: 'done', fail: failed });
+      } catch (error) { failed(error); }
+    });
+  }
   return {
     ...online,
+    source,
     onlineEnv: online.onlineUrl ? (env || '') : '',
     canvas,
     fontFamily,
+    editText,
     windowInfo() {
       const info = optional(api, 'getWindowInfo') || optional(api, 'getSystemInfoSync') || {};
       const menu = optional(api, 'getMenuButtonBoundingClientRect') || optional(api, 'getMenuButtonLayout');
@@ -172,7 +147,6 @@ function createPlatform(api, adUnitId, apiUrl, env) {
     },
     loadImage,
     createSound,
-    rewardedVideo: adUnitId && typeof api.createRewardedVideoAd === 'function' ? rewardedVideo : null,
     share(content, notice) {
       if (typeof api.shareAppMessage !== 'function') {
         notice('当前环境暂不支持分享');

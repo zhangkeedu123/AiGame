@@ -1,7 +1,8 @@
 'use strict';
 
 const { WIDTH, HEIGHT, SCALE, rotatePoint } = require('./puzzle.js');
-const { formatTime } = require('./daily.js');
+const { formatTime, formatLocalDateTime } = require('./daily.js');
+const { shippingFields, shippingStatuses } = require('./collection.js');
 
 let fontFamily = '';
 const COLORS = {
@@ -91,17 +92,23 @@ function atlasDraw(ctx, image, sprite, rect) {
   ctx.drawImage(image, sprite[0], sprite[1], sprite[2], sprite[3], rect.x, rect.y, rect.w, rect.h);
 }
 
-function tracePolygon(ctx, outline) {
+function traceContours(ctx, contours) {
   ctx.beginPath();
-  ctx.moveTo(outline[0], outline[1]);
-  for (let i = 2; i < outline.length; i += 2) ctx.lineTo(outline[i], outline[i + 1]);
-  ctx.closePath();
+  for (const outline of contours) {
+    ctx.moveTo(outline[0], outline[1]);
+    for (let i = 2; i < outline.length; i += 2) ctx.lineTo(outline[i], outline[i + 1]);
+    ctx.closePath();
+  }
+}
+
+function tracePolygon(ctx, outline) {
+  traceContours(ctx, [outline]);
 }
 
 function seams(ctx, level, group, repaired) {
   if (group.ids.length < 2) return;
   ctx.save();
-  tracePolygon(ctx, level.outline);
+  traceContours(ctx, level.contours?.length ? level.contours : [level.outline]);
   ctx.clip();
   for (const seam of level.seams) {
     if (!seam.ids.every(id => group.ids.includes(id))) continue;
@@ -117,38 +124,30 @@ function seams(ctx, level, group, repaired) {
   ctx.restore();
 }
 
-function shardNumbers(ctx, level, group) {
+function shardNumbers(ctx, level, group, numbers) {
   for (const id of group.ids) {
     const { cx, cy, box } = level.shards[id];
-    const size = level.procedural ? Math.max(12, Math.min(22, (box[2] - box[0]) * 0.42, (box[3] - box[1]) * 0.42)) : 22;
+    const size = level.cutout ? Math.max(12, Math.min(22, (box[2] - box[0]) * 0.42, (box[3] - box[1]) * 0.42)) : 22;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(-group.turn * Math.PI / 2);
-    text(ctx, String(id + 1), 0, 0, { align: 'center', size, bold: true, color: '#fffdf4', outline: '#253c33' });
+    text(ctx, String(numbers[id]), 0, 0, { align: 'center', size, bold: true, color: '#fffdf4', outline: '#253c33' });
     ctx.restore();
   }
 }
 
-function drawShard(ctx, level, id, image, decoyImage) {
+function drawShard(ctx, level, id, image) {
   const shard = level.shards[id];
   const [left, top, right, bottom] = shard.box;
   const rect = box(left, top, right - left, bottom - top);
-  if (!level.procedural) {
+  if (!level.cutout) {
     atlasDraw(ctx, image, shard.sprite, rect);
     return;
   }
-  const decoy = id >= level.realCount;
-  const source = decoy ? level.decoyArt : level;
-  const texture = decoy ? decoyImage : image;
   ctx.save();
   tracePolygon(ctx, shard.poly);
   ctx.clip();
-  if (texture) {
-    atlasDraw(ctx, texture, [source.poster[0] + left, source.poster[1] + top, rect.w, rect.h], rect);
-  } else {
-    ctx.fillStyle = '#b4afa0';
-    ctx.fillRect(left, top, rect.w, rect.h);
-  }
+  atlasDraw(ctx, image, shard.sprite, rect);
   ctx.restore();
 }
 
@@ -162,8 +161,13 @@ function groupOutline(ctx, level, group, displayScale, strokes) {
     ctx.strokeStyle = color;
     ctx.lineWidth = width / displayScale;
     for (const id of group.ids) {
-      const poly = level.shards[id].poly;
-      if (level.procedural) {
+      const { poly, contours } = level.shards[id];
+      if (contours?.length) {
+        traceContours(ctx, contours);
+        ctx.stroke();
+        continue;
+      }
+      if (level.cutout) {
         tracePolygon(ctx, poly);
         ctx.stroke();
         continue;
@@ -186,7 +190,7 @@ function groupOutline(ctx, level, group, displayScale, strokes) {
   ctx.restore();
 }
 
-function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
+function openingDraw(ctx, puzzle, image, elapsed) {
   const level = puzzle.level;
   const originX = (WIDTH - 400 * SCALE) / 2;
   const originY = (HEIGHT - 450 * SCALE) / 2;
@@ -218,7 +222,7 @@ function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
     const shard = level.shards[id];
     const [dx, dy] = rotatePoint(shard.cx * SCALE, shard.cy * SCALE, group.turn);
     const targetX = group.x + dx, targetY = group.y + dy;
-    const decoy = level.decoyArt && id >= level.realCount;
+    const decoy = id >= level.realCount;
     ctx.save();
     if (decoy) {
       const arrival = Math.max(0, (progress - 0.32) / 0.68);
@@ -230,15 +234,15 @@ function openingDraw(ctx, puzzle, image, decoyImage, elapsed) {
         startY + (targetY - startY) * travel - kick * (16 + id % 4 * 3));
     }
     const turn = group.turn === 3 ? -1 : group.turn;
-    ctx.rotate(turn * Math.PI / 2 * (decoy ? 1 : travel) + (id % 2 ? 0.16 : -0.16) * kick);
+    if (!decoy) ctx.rotate(turn * Math.PI / 2 * travel + (id % 2 ? 0.16 : -0.16) * kick);
     ctx.scale(SCALE, SCALE);
     ctx.translate(-shard.cx, -shard.cy);
-    drawShard(ctx, level, id, image, decoyImage);
+    drawShard(ctx, level, id, image);
     ctx.restore();
   }
 }
 
-function deskDraw(ctx, layout, puzzle, image, decoyImage, opening) {
+function deskDraw(ctx, layout, puzzle, image, opening) {
   rounded(ctx, layout.desk, 14, COLORS.cloth, '#b8c4af');
   const desk = layout.desk;
   rounded(ctx, box(desk.x + 5, desk.y + 5, desk.w - 10, desk.h - 10), 10, null, '#c9d2bd');
@@ -249,7 +253,7 @@ function deskDraw(ctx, layout, puzzle, image, decoyImage, opening) {
   ctx.translate(layout.field.x, layout.field.y);
   ctx.scale(layout.scale, layout.scale);
   if (opening) {
-    openingDraw(ctx, puzzle, image, decoyImage, opening.elapsed);
+    openingDraw(ctx, puzzle, image, opening.elapsed);
     ctx.restore();
     return;
   }
@@ -264,13 +268,13 @@ function deskDraw(ctx, layout, puzzle, image, decoyImage, opening) {
       ctx.shadowColor = group === puzzle.selected ? '#23554e' : '#465b46';
       ctx.shadowBlur = 3;
       ctx.shadowOffsetY = 2;
-      for (const id of group.ids) drawShard(ctx, puzzle.level, id, image, decoyImage);
+      for (const id of group.ids) drawShard(ctx, puzzle.level, id, image);
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
       ctx.shadowColor = 'transparent';
     }
     seams(ctx, puzzle.level, group, intact);
-    if (!intact) shardNumbers(ctx, puzzle.level, group);
+    if (!intact) shardNumbers(ctx, puzzle.level, group, puzzle.state.numbers);
     ctx.restore();
   }
   if (!intact) {
@@ -288,13 +292,12 @@ function toolbar(ctx, layout, app, hits) {
   const actions = [{ id: 'reference', label: '原器' }];
   if (puzzle.phase === 'fit') {
     actions.push({ id: 'hint', label: '找邻片' });
-    if (puzzle.level.rotations) actions.push({ id: 'rotate', label: '旋转 90°', disabled: !puzzle.selected });
+    if (puzzle.level.rotateCount) actions.push({ id: 'rotate', label: '旋转 90°', disabled: !puzzle.canRotate });
     actions.push({ id: 'rearrange', label: '重排' });
   }
   if (puzzle.phase === 'stored') actions.push(app.screen === 'daily'
     ? { id: 'share', label: '分享成绩', primary: true }
-    : { id: puzzle.index + 1 === puzzle.limit ? 'home' : 'next',
-      label: puzzle.index + 1 === puzzle.limit ? '返回首页' : '下一关', primary: true });
+    : { id: app.nextLevel ? 'next' : 'home', label: app.nextLevel ? '下一关' : '返回首页', primary: true });
   actions.push({ id: 'reset', label: '重开' });
   const gap = 6;
   const w = (layout.w - gap * (actions.length - 1)) / actions.length;
@@ -332,7 +335,12 @@ function drawIcon(ctx, kind, x, y, color) {
   ctx.save();
   ctx.translate(x, y);
   ctx.beginPath();
-  if (kind === 'daily') {
+  if (kind === 'collection') {
+    ctx.moveTo(-4, -7); ctx.lineTo(4, -7); ctx.lineTo(3, -4);
+    ctx.quadraticCurveTo(3, -2, 5, 0); ctx.quadraticCurveTo(8, 4, 5, 6);
+    ctx.quadraticCurveTo(0, 9, -5, 6); ctx.quadraticCurveTo(-8, 4, -5, 0);
+    ctx.quadraticCurveTo(-3, -2, -3, -4); ctx.closePath();
+  } else if (kind === 'daily') {
     ctx.moveTo(-2, -7); ctx.lineTo(-2, -3);
     ctx.moveTo(3, -7); ctx.lineTo(3, -3);
     ctx.moveTo(-6, -1); ctx.lineTo(7, -1);
@@ -372,9 +380,9 @@ function drawIcon(ctx, kind, x, y, color) {
   ctx.restore();
 }
 
-function settingsButton(ctx, hits, rect, light) {
-  rounded(ctx, rect, 12, light ? 'rgba(245,234,210,0.93)' : '#29483e', light ? '#ac8d5e' : COLORS.edge);
-  drawIcon(ctx, 'settings', rect.x + rect.w / 2, rect.y + rect.h / 2, light ? '#254a40' : '#f1d7a1');
+function settingsButton(ctx, hits, rect) {
+  rounded(ctx, rect, 12, 'rgba(245,234,210,0.93)', '#ac8d5e');
+  drawIcon(ctx, 'settings', rect.x + rect.w / 2, rect.y + rect.h / 2, '#254a40');
   hits.push({ id: 'settings', rect });
 }
 
@@ -386,8 +394,7 @@ function drawHome(ctx, layout, app) {
   const left = (width - 330 * scale) / 2;
   const originY = Math.max(top + 6, Math.min(height / 2 - 143 * scale, height - bottom - 379 * scale));
   homeBackground(ctx, width, height, app.imageFor(HOME_ART));
-  if (app.online) button(ctx, hits, 'online', '线上关卡', box(layout.x + w - 142, top + 3, 90, 36), { size: 13 });
-  settingsButton(ctx, hits, box(layout.x + w - 42, top + 3, 42, 36), true);
+  settingsButton(ctx, hits, box(layout.x + w - 42, top + 3, 42, 36));
   ctx.save();
   ctx.translate(left, originY);
   ctx.scale(scale, scale);
@@ -402,11 +409,11 @@ function drawHome(ctx, layout, app) {
   ctx.fillRect(230, 26, 37, 1);
 
   const details = [
-    ['normal', '10 关 · 每关多 5 片', '#2e6b59', '#205344'],
-    ['hard', '20 关 · 20 片起 · 可旋转', '#3c657b', '#2c5269'],
-    ['extreme', '无限关卡 · 可旋转 · 干扰碎片', '#9c6053', '#7a453d'],
+    ['normal', '#2e6b59', '#205344'],
+    ['hard', '#3c657b', '#2c5269'],
+    ['extreme', '#9c6053', '#7a453d'],
   ];
-  details.forEach(([mode, detail, light, dark], i) => {
+  details.forEach(([mode, light, dark], i) => {
     const y = 57 + i * 69;
     const glaze = ctx.createLinearGradient(0, y, 0, y + 57);
     glaze.addColorStop(0, light);
@@ -415,10 +422,10 @@ function drawHome(ctx, layout, app) {
     rounded(ctx, box(45, y, 240, 57), 14, glaze, '#bd9a63');
     addHit('mode-' + mode, 45, y, 240, 57);
     rounded(ctx, box(49, y + 4, 232, 49), 10, null, 'rgba(247,222,167,0.37)');
-    const book = app.modeBooks[mode];
-    const progress = book?.wins?.length;
-    const subtitle = progress === app.modes[mode].limit ? '已通关' :
-      book?.current === undefined ? detail : '继续第 ' + (book.current + 1) + ' 关 · ' + detail.split(' · ')[0];
+    const current = app.modeEntry(mode);
+    const subtitle = current ?
+      '第 ' + current.level_number + ' 关 · ' + (app.completed.has(current.id) ? '已修复' : current.name || '开始修复') :
+      app.modes[mode].subtitle;
     text(ctx, app.modes[mode].name, 165, y + 20, { align: 'center', size: 20, bold: true, color: '#fff2d2' });
     text(ctx, subtitle, 165, y + 40, { align: 'center', size: 11.5, color: '#f1ddaf' });
     drawIcon(ctx, 'chevron', 266, y + 28, '#f0d39d');
@@ -426,11 +433,12 @@ function drawHome(ctx, layout, app) {
 
   const shortcuts = [
     ['daily', '每日一瓷', '#2d5d4e', '#eee4ca'],
+    ['collection', '藏品阁', '#6e4c3c', '#f2e6d1'],
     ['ranking', '排行榜', '#795434', '#f3dfbb'],
     ['share', '分享', '#32586c', '#e6e7da'],
   ];
   shortcuts.forEach(([id, label, color, fill], i) => {
-    const x = 83 + i * 82;
+    const x = 51 + i * 76;
     ctx.save();
     ctx.shadowColor = 'rgba(29,35,30,0.32)';
     ctx.shadowBlur = 6;
@@ -477,18 +485,153 @@ function soundSettings(ctx, app, r, hits) {
   }
 }
 
+function drawCollection(ctx, app, r, hits) {
+  const c = app.collection;
+  const x = r.x + 14, w = r.w - 28;
+  const eligible = c.ready && !c.loading && c.balance >= c.cost;
+  const canRedeem = eligible && app.platform.shippingAvailable;
+  const award = c.ready && !c.loading && c.awards[0];
+  const awardAvailable = Boolean(award && app.platform.shippingAvailable);
+  const progress = c.loading ? '正在同步…' : c.ready ? '实物瓷碗兑换  ' + c.balance + ' / ' + c.cost : '完成每日一瓷赢取实物';
+  rounded(ctx, box(x, r.y + 53, w, 72), 10, '#2a473e', '#607663');
+  text(ctx, progress, x + 12, r.y + 73, { bold: true, color: COLORS.gold });
+  rounded(ctx, box(x + 12, r.y + 90, w - 24, 5), 2, '#142c27');
+  if (c.balance) rounded(ctx, box(x + 12, r.y + 90, (w - 24) * Math.min(1, c.balance / c.cost), 5), 2, COLORS.gold);
+  const hint = canRedeem ? '集齐了，申请一份实物瓷器寄回家' :
+    eligible ? '已集齐，安全连接可提交收货信息' : '每日首胜入藏 · 30 件可兑换如实物瓷碗';
+  text(ctx, hint, x + 12, r.y + 109,
+    { size: 11, color: COLORS.note, width: w - 24 });
+  const half = (w - 8) / 2;
+  button(ctx, hits, 'collection-items', '我的收藏', box(x, r.y + 134, half, 33), { primary: c.tab === 'items', size: 12 });
+  button(ctx, hits, 'collection-claims', '兑换记录', box(x + half + 8, r.y + 134, half, 33),
+    { primary: c.tab === 'claims', size: 12 });
+  const items = c.tab === 'items' ? c.records(app.records) : c.claims;
+  const startY = r.y + 174;
+  const rows = Math.max(1, Math.min(3, Math.floor((r.h - 260) / 55)));
+  const start = c.page * rows;
+  items.slice(start, start + rows).forEach((item, i) => {
+    const y = startY + i * 55;
+    rounded(ctx, box(x, y, w, 50), 8, '#29453b');
+    if (c.tab === 'items') {
+      const thumbnail = box(x + 6, y + 4, 42, 42);
+      rounded(ctx, thumbnail, 6, '#354e43');
+      const image = item.image && item.poster && app.imageFor(item);
+      if (image) poster(ctx, item, image, thumbnail, false);
+      else drawIcon(ctx, 'collection', x + 27, y + 24, COLORS.gold);
+      text(ctx, item.name || '每日藏品', x + 57, y + 16, { bold: true, width: w - 138 });
+      const timestamp = formatLocalDateTime(item.completed_at) || item.date;
+      text(ctx, timestamp + ' · 用时 ' + formatTime(item.ms), x + 57, y + 35,
+        { color: COLORS.note, size: 11, width: w - 67 });
+      text(ctx, item.verified ? '已入藏' : '本机收藏', x + w - 10, y + 17,
+        { size: 11, color: item.verified ? COLORS.gold : COLORS.note, align: 'right' });
+    } else {
+      const day = formatLocalDateTime(item.created_at).slice(0, 10);
+      text(ctx, day + (item.reward_month ? ' · 月榜冠军奖品' : ' · 收藏兑换'), x + 10, y + 16,
+        { size: 13, bold: true, width: w - 91 });
+      text(ctx, shippingStatuses[item.status] || '待处理', x + w - 10, y + 16, { color: COLORS.gold, size: 12, align: 'right' });
+      text(ctx, item.tracking_number ? item.carrier + '  ' + item.tracking_number : '物流信息将在发货后更新',
+        x + 10, y + 35, { width: w - 20, color: COLORS.note, size: 11 });
+    }
+  });
+  if (!items.length) text(ctx, c.tab === 'items' ? '完成每日一瓷，第一件藏品就会出现在这里。' : '兑换成功后，可在这里查看发货进度。',
+    x + w / 2, startY + 29, { width: w, align: 'center', color: COLORS.note, size: 13 });
+  const lastY = r.y + r.h - 48;
+  if (items.length > rows) {
+    button(ctx, hits, 'collection-prev', '上一页', box(x, lastY - 38, 62, 28), { disabled: c.page === 0, size: 11 });
+    button(ctx, hits, 'collection-next', '下一页', box(x + w - 62, lastY - 38, 62, 28),
+      { disabled: start + rows >= items.length, size: 11 });
+    text(ctx, (c.page + 1) + ' / ' + Math.ceil(items.length / rows), x + w / 2, lastY - 24,
+      { size: 11, color: COLORS.note, align: 'center' });
+  } else if (c.notice) {
+    text(ctx, c.notice, x, lastY - 14, { size: 11, color: COLORS.gold, width: w });
+  }
+  button(ctx, hits, 'redeem', eligible ? '兑换实物瓷器' : '集齐 30 件可兑换', box(x, lastY, award ? half : w, 36),
+    { primary: canRedeem, disabled: !canRedeem, size: 13 });
+  if (award) button(ctx, hits, 'redeem-award', '领取月榜冠军奖', box(x + half + 8, lastY, half, 36),
+    { primary: awardAvailable, disabled: !awardAvailable, size: 13 });
+}
+
+function drawRedemption(ctx, app, r, hits) {
+  const c = app.collection;
+  const x = r.x + 14, w = r.w - 28;
+  const gap = Math.min(64, (r.h - 158) / 3);
+  text(ctx, c.rewardMonth ? c.rewardMonth + ' 月榜冠军 · 领取实物瓷器一件' :
+    '可兑换实物瓷碗等瓷器 · 消耗 ' + c.cost + ' 件额度', x, r.y + 59,
+    { size: 13, color: COLORS.note, width: w });
+  shippingFields.forEach(([key, label, placeholder], i) => {
+    const y = r.y + 79 + i * gap;
+    const value = c.form[key];
+    text(ctx, label, x, y + 8, { size: 12, color: COLORS.gold });
+    button(ctx, hits, 'shipping-' + key, value ? (value.length > 24 ? value.slice(0, 24) + '…' : value) : placeholder,
+      box(x, y + 18, w, Math.min(34, gap - 20)), { size: 13, disabled: c.editing || c.submitting });
+  });
+  const y = r.y + r.h - 49;
+  text(ctx, c.notice || '提交后，收货信息仅用于本次瓷器寄送。', x, y - 17, { size: 11, color: COLORS.note, width: w });
+  button(ctx, hits, 'redeem-submit', c.submitting ? '提交中…' : '确认提交兑换', box(x, y, w, 37),
+    { primary: true, disabled: c.editing || c.submitting });
+}
+
+function drawRanking(ctx, app, r, hits) {
+  const board = app.ranking;
+  const x = r.x + 14, width = r.w - 28;
+  rounded(ctx, box(x, r.y + 55, width, 79), 10, '#2c4a40', '#8e7653');
+  text(ctx, '每月冠军 · 赢一件实物瓷器', x + 12, r.y + 75, { color: COLORS.gold, bold: true, size: 16 });
+  text(ctx, '闯得更远排在前，同关用时越短排名越高。', x + 12, r.y + 98,
+    { color: COLORS.note, size: 12, width: width - 24 });
+  text(ctx, '北京时间每月结算 · 奖品在藏品阁领取', x + 12, r.y + 118, { color: COLORS.note, size: 11, width: width - 24 });
+  if (board.notice) {
+    button(ctx, hits, 'ranking', board.notice, box(x, r.y + 149, width, 36), { size: 13 });
+    return;
+  }
+  if (board.loading || !board.month) {
+    text(ctx, '正在读取月榜…', x + 12, r.y + 163, { color: COLORS.note, size: 13 });
+    return;
+  }
+  const half = (width - 8) / 2;
+  button(ctx, hits, 'rank-current', '本月榜', box(x, r.y + 144, half, 32), { primary: board.month === board.current_month, size: 12 });
+  button(ctx, hits, 'rank-previous', '上月榜', box(x + half + 8, r.y + 144, half, 32),
+    { primary: board.month !== board.current_month, size: 12 });
+  const champion = board.winner ? '冠军 ' + board.winner.nickname + ' · 奖品' + (board.winner.claimed ? '已申请' : '待领取') :
+    '名次   玩家                         关卡 / 用时';
+  text(ctx, board.month + ' · ' + champion, x + 7, r.y + 195, { size: 11, color: COLORS.note, width: width - 14 });
+  const rowHeight = 39;
+  const rows = Math.max(1, Math.floor((r.h - 255) / rowHeight));
+  const start = board.page * rows;
+  board.items.slice(start, start + rows).forEach((item, i) => {
+    const y = r.y + 208 + i * rowHeight;
+    rounded(ctx, box(x, y, width, 34), 7, item.rank === 1 ? '#4b4933' : '#29453b');
+    text(ctx, String(item.rank).padStart(2, '0'), x + 10, y + 17, { bold: true, color: COLORS.gold });
+    text(ctx, item.nickname || '玩家', x + 42, y + 17, { bold: true, size: 13, width: width - 166 });
+    text(ctx, (app.modes[item.category]?.short || '') + ' 第 ' + item.level_number + ' 关', x + width - 73, y + 17,
+      { size: 11, color: COLORS.note, align: 'right' });
+    text(ctx, formatTime(item.elapsed_ms) + '.' + String(item.elapsed_ms % 1000).padStart(3, '0'),
+      x + width - 8, y + 17, { size: 12, color: COLORS.gold, align: 'right' });
+  });
+  if (!board.items.length) text(ctx, '榜单还没有成绩，来完成一关吧。', x + width / 2, r.y + 239,
+    { size: 13, color: COLORS.note, align: 'center' });
+  if (board.items.length > rows) {
+    const y = r.y + r.h - 42;
+    button(ctx, hits, 'rank-prev', '上一页', box(x, y, 63, 30), { size: 11, disabled: board.page === 0 });
+    button(ctx, hits, 'rank-next', '下一页', box(x + width - 63, y, 63, 30),
+      { size: 11, disabled: start + rows >= board.items.length });
+    text(ctx, (board.page + 1) + ' / ' + Math.ceil(board.items.length / rows), x + width / 2, y + 15,
+      { size: 12, color: COLORS.note, align: 'center' });
+  }
+}
+
 function drawModal(ctx, app, layout) {
   const puzzle = app.puzzle;
   const kind = app.modal;
   const hits = [];
   const w = Math.min(420, layout.w);
-  const height = kind === 'settings' ? 270 : kind === 'timeout' ? 204 :
+  const height = kind === 'settings' ? 270 :
     kind === 'reset' ? 170 : Math.min(430, layout.height - layout.top - 34);
   const r = box((layout.width - w) / 2, Math.max(layout.top + 4, (layout.height - height) / 2), w, height);
   ctx.fillStyle = 'rgba(8,20,19,0.78)';
   ctx.fillRect(0, 0, layout.width, layout.height);
   rounded(ctx, r, 17, COLORS.panel, '#a18b5e');
-  const title = kind === 'online' ? '线上关卡' : kind === 'settings' ? '声音设置' : kind === 'ranking' ? '排行榜' : kind === 'timeout' ? '时间到' : kind === 'reset' ? '重新打散碎片？' :
+  const title = kind === 'collection' ? '藏品阁' : kind === 'redeem' ? '兑换实物瓷器' :
+    kind === 'settings' ? '声音设置' : kind === 'ranking' ? '闯关月榜' : kind === 'reset' ? '重新打散碎片？' :
     kind === 'win' ? '「' + puzzle.level.name + '」已入藏' : puzzle.level.name;
   text(ctx, title, r.x + 14, r.y + 27, { color: COLORS.gold, size: 21, bold: true, serif: true, width: r.w - 84 });
   if (kind === 'settings') {
@@ -496,77 +639,36 @@ function drawModal(ctx, app, layout) {
     soundSettings(ctx, app, r, hits);
     return hits;
   }
-  if (kind === 'timeout') {
-    button(ctx, hits, 'home', '首页', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12, disabled: app.watching });
-    text(ctx, app.adNotice || '重开本关，或完整观看广告续时 60 秒。', r.x + 14, r.y + 76,
-      { color: COLORS.note, width: r.w - 28 });
-    const actionWidth = (r.w - 37) / 2;
-    button(ctx, hits, 'confirm-reset', '本关重开', box(r.x + 14, r.y + 125, actionWidth, 46), { disabled: app.watching });
-    button(ctx, hits, 'ad-time', app.watching ? '正在播放广告' : '看广告 +60 秒',
-      box(r.x + 23 + actionWidth, r.y + 125, actionWidth, 46), { primary: !app.watching, disabled: app.watching });
-    return hits;
-  }
-  button(ctx, hits, 'close', '关闭', box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12 });
-  if (kind === 'online') {
-    const { levels, page, loading, notice } = app.online;
-    const rows = Math.max(1, Math.min(5, Math.floor((r.h - 142) / 43)));
-    const start = page * rows;
-    if (loading || notice || !levels.length) text(ctx, loading ? '连接中…' : notice || '暂无线上的已发布关卡',
-      r.x + 14, r.y + 60, { size: 13, width: r.w - 28 });
-    if (!loading) {
-      levels.slice(start, start + rows).forEach((level, i) =>
-        button(ctx, hits, 'online-level-' + level.id, level.name, box(r.x + 14, r.y + 80 + i * 43, r.w - 28, 37)));
-      const y = r.y + r.h - 50;
-      const w = (r.w - 36) / 3;
-      button(ctx, hits, 'online-prev', '上一页', box(r.x + 14, y, w, 36), { disabled: page === 0, size: 12 });
-      if (app.online.player) {
-        text(ctx, app.online.player.nickname || '已绑定', r.x + 18 + w + w / 2, y + 18,
-          { size: 12, align: 'center', color: COLORS.note, width: w - 6 });
-      } else {
-        button(ctx, hits, 'online-token', '绑定令牌', box(r.x + 18 + w, y, w, 36), { size: 12 });
-      }
-      button(ctx, hits, 'online-next', '下一页', box(r.x + 22 + w * 2, y, w, 36),
-        { disabled: start + rows >= levels.length, size: 12 });
-    }
+  button(ctx, hits, kind === 'redeem' ? 'redeem-back' : 'close', kind === 'redeem' ? '返回' : '关闭',
+    box(r.x + r.w - 59, r.y + 10, 48, 34), { size: 12, disabled: kind === 'redeem' && (app.collection.editing || app.collection.submitting) });
+  if (kind === 'collection') {
+    drawCollection(ctx, app, r, hits);
+  } else if (kind === 'redeem') {
+    drawRedemption(ctx, app, r, hits);
   } else if (kind === 'ranking') {
-    text(ctx, '本机 · 每日一瓷最快五次', r.x + 14, r.y + 63, { size: 14, color: COLORS.note });
-    if (!app.records.length) {
-      text(ctx, '完成今日修复后，用时将显示在这里。', r.x + 14, r.y + 108,
-        { color: COLORS.note, width: r.w - 28 });
-      button(ctx, hits, 'daily', '挑战每日一瓷', box(r.x + 14, r.y + 139, r.w - 28, 42), { primary: true });
-    }
-    const rowHeight = Math.min(57, (r.h - 92) / 5);
-    app.records.slice(0, 5).forEach((record, i) => {
-      const y = r.y + 82 + rowHeight * i;
-      rounded(ctx, box(r.x + 13, y, r.w - 26, rowHeight - 5), 6, '#29453b');
-      text(ctx, String(i + 1).padStart(2, '0'), r.x + 25, y + rowHeight / 2 - 3,
-        { size: 17, color: COLORS.gold, bold: true });
-      text(ctx, app.levels[record.index].name, r.x + 58, y + rowHeight / 2 - 10, { size: 15, bold: true });
-      text(ctx, record.date, r.x + 58, y + rowHeight / 2 + 8, { size: 11, color: COLORS.note });
-      text(ctx, formatTime(record.ms), r.x + r.w - 24, y + rowHeight / 2 - 3,
-        { align: 'right', size: 17, color: COLORS.gold });
-    });
+    drawRanking(ctx, app, r, hits);
   } else if (kind === 'reset') {
     text(ctx, '这关的桌面位置与拼合进度将重置。', r.x + 14, r.y + 75, { width: r.w - 27 });
     button(ctx, hits, 'close', '继续拼', box(r.x + 14, r.y + 111, (r.w - 34) / 2, 42));
     button(ctx, hits, 'confirm-reset', '重新开始', box(r.x + (r.w + 6) / 2, r.y + 111, (r.w - 34) / 2, 42), { primary: true });
   } else {
     const daily = app.screen === 'daily';
-    const last = puzzle.index + 1 === puzzle.limit;
+    const last = !app.nextLevel;
     const artwork = box(r.x + 13, r.y + 52, r.w - 26, r.h - (kind === 'win' ? daily ? 172 : 147 : 101));
     rounded(ctx, artwork, 10, '#3c5647');
     poster(ctx, puzzle.level, app.imageFor(puzzle.level), artwork, puzzle.phase === 'stored');
-    const label = kind !== 'win' ? puzzle.level.story : daily ? '本次修复用时 ' + formatTime(app.daily.elapsed) :
-      app.screen === 'online' ? app.online.notice :
-      last ? '本模式全部关卡已完成。' : '下一关已解锁。';
+    const label = kind !== 'win' ? puzzle.level.story : '本关用时 ' + formatTime(puzzle.state.elapsed);
     text(ctx, label, r.x + 14, artwork.y + artwork.h + 21, { color: COLORS.note, width: r.w - 28 });
     if (kind === 'win') {
       const y = r.y + r.h - 49;
-      if (daily && app.shareNotice) text(ctx, app.shareNotice, r.x + 14, y - 13,
+      const notice = daily ? app.shareNotice : app.loadingLevel ? '正在取出下一件瓷器…' : app.scoreNotice;
+      if (notice) text(ctx, notice, r.x + 14, y - 13,
         { size: 12, width: r.w - 28, color: COLORS.gold });
-      button(ctx, hits, 'close', '留在桌面', box(r.x + 13, y, (r.w - 33) / 2, 37));
-      button(ctx, hits, daily ? 'share' : last ? 'home' : 'next', daily ? '分享成绩' : last ? '返回首页' : '下一关',
-        box(r.x + (r.w + 7) / 2, y, (r.w - 33) / 2, 37), { primary: true });
+      const actions = daily ? [['close', '留在桌面'], ['share', '分享成绩'], ['collection', '查看藏品']] :
+        [['close', '留在桌面'], [last ? 'home' : 'next', last ? '返回首页' : '下一关']];
+      const width = (r.w - 26 - (actions.length - 1) * 7) / actions.length;
+      actions.forEach(([id, label], i) => button(ctx, hits, id, label,
+        box(r.x + 13 + (width + 7) * i, y, width, 37), { size: 13, primary: i === actions.length - 1, disabled: id === 'next' && app.loadingLevel }));
     }
   }
   return hits;
@@ -583,23 +685,20 @@ function draw(ctx, layout, app) {
   const daily = app.screen === 'daily';
   const headerY = top + (compact ? 0 : 3), headerHeight = compact ? 31 : 35;
   button(ctx, hits, 'home', '‹ 首页', box(x, headerY, 75, headerHeight), { size: 13 });
-  settingsButton(ctx, hits, box(x + (w - 70) / 2, headerY, 40, headerHeight), false);
-  if (p.phase === 'fit') {
-    const clock = box(x + w - 104, headerY, 104, headerHeight);
-    const low = p.state.remaining <= 15000;
-    rounded(ctx, clock, 7, low ? '#51322c' : COLORS.panel, low ? '#d2806e' : COLORS.edge);
-    text(ctx, p.state.remaining > 0 ? formatTime(p.state.remaining) : '00:00', clock.x + 52, clock.y + clock.h / 2,
-      { size: 19, bold: true, align: 'center', color: low ? '#ffd6c4' : COLORS.gold });
-  }
-  text(ctx, daily ? '每日一瓷 · ' + app.daily.date : '第 ' + (p.index + 1) + ' 关 · ' + p.level.difficulty,
+  const clock = box(x + w - 117, headerY, 117, headerHeight);
+  rounded(ctx, clock, 7, COLORS.panel, COLORS.edge);
+  text(ctx, '用时', clock.x + 14, clock.y + clock.h / 2, { size: 11, color: COLORS.note });
+  text(ctx, app.hasElapsedRecord ? formatTime(app.elapsed()) : '—', clock.x + 75, clock.y + clock.h / 2,
+    { size: 19, bold: true, align: 'center', color: COLORS.gold });
+  text(ctx, daily ? '每日一瓷 · ' + app.daily.date : '第 ' + p.level.level_number + ' 关 · ' + app.modes[p.level.category].name,
     x + 3, levelY + 2, { size: 12, color: COLORS.gold, bold: true });
   text(ctx, p.level.name, x + 3, levelY + (compact ? 23 : 28), { size: compact ? 23 : 30, serif: true, bold: true, width: w - 95 });
   const status = (p.level.realCount || p.level.shards.length) + ' 片';
   text(ctx, status, x + w - 3, levelY + 8, { color: COLORS.gold, size: 18, bold: true, align: 'right' });
-  text(ctx, p.phase === 'stored' ? '已修复' : p.level.decoyArt ? '含干扰碎片' : '待合拢', x + w - 3, levelY + 29,
+  text(ctx, p.phase === 'stored' ? '已修复' : p.level.decoy_count > 0 ? '含干扰碎片' : '待合拢', x + w - 3, levelY + 29,
     { color: COLORS.note, size: 12, align: 'right' });
   const image = app.imageFor(p.level);
-  deskDraw(ctx, layout, p, image, p.level.decoyArt && app.imageFor(p.level.decoyArt), app.opening);
+  deskDraw(ctx, layout, p, image, app.opening);
   if (!image) {
     const [cx, cy] = [layout.desk.x + layout.desk.w / 2, layout.desk.y + layout.desk.h / 2];
     if (app.imageFailed(p.level)) button(ctx, hits, 'retry', '瓷片加载失败，点此重试', box(cx - 101, cy - 21, 202, 42));

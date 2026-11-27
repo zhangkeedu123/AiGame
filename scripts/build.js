@@ -40,14 +40,13 @@ for (const name of target ? [target] : all) {
   for (const directory of ['core', 'platform', 'assets']) {
     fs.rmSync(path.join(output, directory), { force: true, recursive: true });
   }
-  fs.cpSync(path.join(root, 'src'), output, { recursive: true, force: true });
+  fs.cpSync(path.join(root, 'src'), output, {
+    recursive: true, force: true,
+    filter: source => !/^(?:vase-\d+\.png|sound-timeout\.wav)$/.test(path.basename(source)),
+  });
   fs.writeFileSync(path.join(output, 'platform', 'online-config.js'),
     "'use strict';\nmodule.exports = " +
     JSON.stringify({ env: env.env, label: env.label, apiUrl: env.apiUrl }) + ';\n', 'utf8');
-  const rewardedId = ids.rewardedAds?.[name];
-  const adUnitId = typeof rewardedId === 'string' ? rewardedId.trim() : '';
-  fs.writeFileSync(path.join(output, 'platform', 'reward-config.js'),
-    "'use strict';\nmodule.exports = " + JSON.stringify({ adUnitId }) + ';\n', 'utf8');
   fs.copyFileSync(path.join(template, 'game.js'), path.join(output, 'game.js'));
   fs.copyFileSync(path.join(root, 'platforms', 'game.json'), path.join(output, 'game.json'));
 

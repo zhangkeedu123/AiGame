@@ -15,11 +15,6 @@
     main { display: grid; gap: 8px; justify-content: center; padding: 8px; }
     header { display: flex; gap: 8px; justify-content: space-between; align-items: center; min-height: 32px; }
     h1 { margin: 0; font-size: 14px; }
-    button {
-      min-height: 32px; padding: 4px 8px; border: 1px solid #5a7168; border-radius: 6px;
-      color: #fff1d6; background: #2d453d; cursor: pointer; font-size: 12px;
-    }
-    button:focus-visible { outline: 2px solid #f1cb86; outline-offset: 2px; }
     .device {
       width: min(390px, calc(100vw - 16px));
       /* 旧内核不认 dvh，先给 vh 兜底；手机浏览器地址栏伸缩时 dvh 更贴合。 */
@@ -37,7 +32,6 @@
   <main>
     <header>
       <h1>金缮夜馆</h1>
-      <button type="button" id="reset-preview">清除预览存档</button>
     </header>
     <div class="device"><canvas id="game" aria-label="金缮夜馆游戏画面"></canvas></div>
     <pre id="error" role="alert" hidden></pre>

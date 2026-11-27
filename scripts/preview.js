@@ -21,6 +21,14 @@ const host = rest[1] || process.env.HOST || (deployed ? '0.0.0.0' : '127.0.0.1')
 // 页面上不再提供切换入口。
 const backend = describe(readLocalConfig(root), envArg);
 const apiOrigin = backend.apiUrl;
+const uuid = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
+const playerRoutes = {
+  GET: new RegExp('^(?:levels(?:/' + uuid + '(?:/atlas\\.png)?)?|ranking|me(?:/(?:campaign|collection|progress))?)$', 'i'),
+  POST: new RegExp('^me/(?:guest|login|daily/(?:start|complete)|collection/redemptions|campaign/(?:levels/' +
+    uuid + '/start|attempts/' + uuid + '/complete))$', 'i'),
+  PUT: new RegExp('^me/progress/' + uuid + '$', 'i'),
+};
+const onlinePrefix = '/online/api/v1/';
 
 function moduleId(file) {
   return path.relative(source, file).split(path.sep).join('/');
@@ -100,7 +108,7 @@ const server = http.createServer(async (request, response) => {
       }));
       return;
     }
-    if (/^\/online\/api\/v1\/(levels(?:\/[a-f0-9-]{36}(?:\/atlas\.png)?)?|me|me\/(?:guest|login|progress(?:\/[a-f0-9-]{36})?))$/.test(pathname)) {
+    if (pathname.startsWith(onlinePrefix) && playerRoutes[request.method]?.test(pathname.slice(onlinePrefix.length))) {
       if (!apiOrigin) {
         answer(response, 503, 'application/json', JSON.stringify({ detail: '未配置后台地址' }));
         return;

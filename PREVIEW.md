@@ -25,7 +25,7 @@ node scripts/preview.js
 
 如果使用本机 Codex 桌面端，也可以在它的内置浏览器打开同一个地址。使用 VS Code 扩展时，可以继续在编辑器里让 Codex 修改源码，同时在 Chrome 或 Edge 里刷新验证。
 
-预览会从当前 `src/main.js` 加载同一套玩法和 Canvas 界面。修改后保存文件，按 Ctrl+R 刷新即可。按 F12 查看 Console 报错。需要回到第一关时，可以用页面上的「清除预览存档」。网页预览使用本机浏览器存储，微信存档由微信运行时处理。终端里按 Ctrl+C 可以停止服务。
+预览会从当前 `src/main.js` 加载同一套玩法和 Canvas 界面。修改后按 Ctrl+R 刷新，按 F12 查看 Console 报错。桌面进度保存在当前浏览器，终端里按 Ctrl+C 可以停止服务。
 
 ## 让手机试玩
 

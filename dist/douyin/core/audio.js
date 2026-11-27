@@ -7,7 +7,6 @@ const tracks = {
   join: 'sound-join',
   rotate: 'sound-rotate',
   win: 'sound-win',
-  timeout: 'sound-timeout',
 };
 
 function clampVolume(value) {

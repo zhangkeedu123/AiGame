@@ -4,10 +4,6 @@
   const canvas = document.querySelector('#game');
   const errorBox = document.querySelector('#error');
   const savePrefix = 'jinyao-preview:';
-  const savedKey = 'jinyao-museum-v2';
-  const dailyKey = 'jinyao-daily-v1';
-  const modesKey = 'jinyao-modes-v1';
-  let resettingSave = false;
   let audioContext;
 
   function unlockAudio() {
@@ -89,18 +85,25 @@
     const online = await fetch('/online-enabled').then(response => response.json())
       .catch(() => ({ enabled: false }));
     const env = online.enabled && online.env ? online.env : '';
+    const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 
     window.jinyaoPreview = window.startJinyao({
       ...(env ? {
         onlineEnv: env,
         onlineUrl: path => '/online' + path,
+        shippingAvailable: (location.protocol === 'https:' || localHost) &&
+          (/^https:\/\//i.test(online.apiUrl) ||
+            (localHost && /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(online.apiUrl))),
         async onlineRequest(path, { method = 'GET', token, body } = {}) {
           const headers = { 'Content-Type': 'application/json' };
           // 不用 Authorization：托管网关会把它剥掉，改用自定义头，由预览服务转成 Bearer。
           if (token) headers['X-Player-Token'] = token;
-          const response = await fetch('/online' + path, { method, headers, body: body && JSON.stringify(body) });
+          const response = await fetch('/online' + path, {
+            method, headers, body: body && JSON.stringify(body), signal: AbortSignal.timeout(8000),
+          });
           if (!response.ok) {
-            const error = new Error('HTTP ' + response.status);
+            const body = await response.json().catch(() => ({}));
+            const error = new Error(typeof body.detail === 'string' ? body.detail : '服务暂不可用，请重试。');
             error.status = response.status;
             throw error;
           }
@@ -108,6 +111,9 @@
         },
       } : {}),
       canvas,
+      editText(label, value, maxLength) {
+        return Promise.resolve(window.prompt(label, value)?.slice(0, maxLength));
+      },
       fontFamily: fallback,
       unlockAudio,
       createSound,
@@ -150,23 +156,12 @@
         catch (_) { return null; }
       },
       write(key, data) {
-        if (resettingSave) return;
         try { localStorage.setItem(savePrefix + key, JSON.stringify(data)); }
         catch (error) { console.warn('预览存档写入失败', error); }
       },
       frame(callback) { window.requestAnimationFrame(callback); },
     });
 
-    document.querySelector('#reset-preview').addEventListener('click', () => {
-      if (!window.confirm('清除这个浏览器里的小游戏预览进度？')) return;
-      try {
-        localStorage.removeItem(savePrefix + savedKey);
-        localStorage.removeItem(savePrefix + dailyKey);
-        localStorage.removeItem(savePrefix + modesKey);
-        resettingSave = true;
-        window.location.reload();
-      } catch (error) { showError(error); }
-    });
   }
 
   window.addEventListener('error', event => showError(event.error || event.message));

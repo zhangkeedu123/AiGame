@@ -4,457 +4,297 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { computeLayout, OPENING_DURATION } = require('../src/core/view.js');
-const { Puzzle, areNeighbors, groupBounds, matchNearby, SCALE } = require('../src/core/puzzle.js');
-const levels = require('../src/core/levels.js');
-const { dailyEdition, dailyRandom } = require('../src/core/daily.js');
-const { modes, modeLevel, polygonContains } = require('../src/core/modes.js');
 
 const root = path.resolve(__dirname, '..');
-const storeKey = 'jinyao-museum-v2';
-const dailyKey = 'jinyao-daily-v1';
-const modesKey = 'jinyao-modes-v1';
-const audioKey = 'jinyao-audio-v1';
+const config = require('../src/core/view.js');
 
-function fileNames(dir) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const file = path.join(dir, entry.name);
-    return entry.isDirectory() ? fileNames(file) : [file];
+function files(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const item = path.join(directory, entry.name);
+    return entry.isDirectory() ? files(item) : [item];
   });
 }
 
 function verifyFiles(output) {
-  const game = JSON.parse(fs.readFileSync(path.join(output, 'game.json')));
-  assert.equal(game.deviceOrientation, 'portrait');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'game.json'))).deviceOrientation, 'portrait');
   JSON.parse(fs.readFileSync(path.join(output, 'project.config.json')));
-  for (const file of fileNames(path.join(root, 'src'))) {
-    const copy = path.join(output, path.relative(path.join(root, 'src'), file));
-    assert.ok(fs.readFileSync(file).equals(fs.readFileSync(copy)), '生成目录过期，请先运行构建');
+  const source = path.join(root, 'src');
+  for (const file of files(source)) {
+    const copy = path.join(output, path.relative(source, file));
+    if (/^(?:vase-\d+\.png|sound-timeout\.wav)$/.test(path.basename(file))) {
+      assert.equal(fs.existsSync(copy), false);
+    } else {
+      assert.ok(fs.readFileSync(file).equals(fs.readFileSync(copy)), '生成目录过期：' + file);
+    }
   }
-  for (const file of fileNames(output).filter(file => file.endsWith('.js'))) {
+  for (const file of files(output).filter(item => item.endsWith('.js'))) {
     execFileSync(process.execPath, ['--check', file]);
   }
-  for (const level of levels) {
-    const png = fs.readFileSync(path.join(output, level.image));
-    assert.equal(png.toString('hex', 0, 8), '89504e470d0a1a0a');
-    const w = png.readUInt32BE(16), h = png.readUInt32BE(20);
-    for (const [x, y, sw, sh] of [level.poster, ...level.shards.map(s => s.sprite)]) {
-      assert.ok(x >= 0 && y >= 0 && sw > 0 && sh > 0 && x + sw <= w && y + sh <= h);
-    }
+  for (const file of ['core/levels.js', 'core/geometry.js', 'platform/reward-config.js']) {
+    assert.equal(fs.existsSync(path.join(output, file)), false);
   }
 }
 
-async function mockRuntime(output, platform) {
-  const info = {
-    width: 390, height: 844, ratio: 3, statusBarHeight: 24, menuBottom: 59,
-    safeArea: { top: 24, bottom: 817, left: 0, right: 390 },
+function details(id, level_number, category) {
+  const shapes = [
+    [120, 160, 192, 160, 210, 208, 176, 220, 120, 204],
+    [192, 160, 280, 160, 280, 204, 210, 208],
+    [120, 204, 176, 220, 210, 208, 280, 204, 279, 280, 120, 280],
+    [148, 171, 177, 180, 165, 193, 141, 187],
+  ];
+  const shards = shapes.map(poly => {
+    const xs = poly.filter((_, i) => i % 2 === 0), ys = poly.filter((_, i) => i % 2 === 1);
+    const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    const [left, top, right, bottom] = box;
+    return { poly, box, sprite: [left, top, right - left, bottom - top],
+      cx: (left + right) / 2, cy: (top + bottom) / 2 };
+  });
+  return {
+    id, level_number, category, name: '测试瓷器 ' + level_number, atlas_version: 1, cutout: true,
+    rotations: 3, rotate_count: 2, decoy_count: 1, snapDistance: 12, points: [],
+    poster: [0, 0, 400, 450], outline: [120, 160, 280, 160, 280, 280, 120, 280],
+    shards, seams: [
+      { ids: [0, 1], poly: [192, 160, 210, 208] },
+      { ids: [0, 2], poly: [120, 204, 176, 220, 210, 208] },
+      { ids: [1, 2], poly: [210, 208, 280, 204] },
+    ],
   };
-  const layout = computeLayout(info);
-  const queue = [], events = {};
-  const initialTime = 6 * 86400000;
-  const edition = dailyEdition(initialTime, levels.length);
-  let labels = [], imagesDrawn = 0, imageFallback = 0, fontLoaded = false, share;
-  let storedModes = '';
-  let storedAudio = '';
-  let adClosed, videoShown = 0;
-  const strokes = [], numberOutlines = [];
-  const cropWidths = [];
-  let arcs = 0;
-  let openingFrames = false;
-  const sounds = new Map();
-  let stored = JSON.stringify({
-    current: 0, wins: [], games: { 0: {
-      groups: [
-        { ids: [0], x: 45, y: 54, turn: 0 },
-        { ids: [1], x: -25, y: 130, turn: 0 },
-        { ids: [2], x: 52, y: 209, turn: 0 },
-      ], paint: [],
-    } },
-  });
-  let storedDaily = JSON.stringify({
-    current: { date: edition.date, elapsed: 4000, book: JSON.parse(stored) },
-    records: [],
-  });
-  const ctx = {};
-  for (const name of ['rotate','beginPath','closePath','moveTo',
-    'lineTo','quadraticCurveTo','fill','clip','fillRect']) ctx[name] = () => {};
-  ctx.arc = (_, __, radius) => { if (radius >= 9) arcs++; };
-  ctx.createLinearGradient = () => ({ addColorStop() {} });
-  ctx.stroke = () => strokes.push(ctx.strokeStyle);
-  ctx.strokeText = label => numberOutlines.push(label);
-  const transforms = [];
-  let transform = { x: 0, y: 0, sx: 1, sy: 1 };
-  ctx.save = () => transforms.push({ ...transform });
-  ctx.restore = () => { transform = transforms.pop(); };
-  ctx.translate = (x, y) => {
-    transform.x += x * transform.sx;
-    transform.y += y * transform.sy;
-  };
-  ctx.scale = (x, y) => { transform.sx *= x; transform.sy *= y; };
-  ctx.drawImage = (_, sourceX, sourceY, sourceWidth) => {
-    imagesDrawn++;
-    cropWidths.push(sourceWidth);
-  };
-  ctx.fillText = (label, x, y) => labels.push({
-    label, x: (transform.x + x * transform.sx) / info.ratio, y: (transform.y + y * transform.sy) / info.ratio,
-  });
-  const canvas = { getContext: kind => kind === '2d' ? ctx : null, width: 0, height: 0 };
-  canvas.requestAnimationFrame = callback => queue.push(callback);
-  const systemInfo = () => ({
-    windowWidth: info.width, windowHeight: info.height, pixelRatio: info.ratio,
-    statusBarHeight: info.statusBarHeight, safeArea: info.safeArea,
-  });
+}
+
+async function checkRuntime(output, source) {
+  const { createPlatform } = require(path.join(output, 'platform/mini-game.js'));
+  const { start } = require(path.join(output, 'main.js'));
+  const { Puzzle, SCALE } = require(path.join(output, 'core/puzzle.js'));
+  const queue = [], events = {}, requests = [], images = [], labels = [];
+  const storage = new Map(), completed = new Set();
+  const catalog = [details('first', 5, 'normal'), details('second', 6, 'normal'), details('hard', 1, 'hard')];
+  const nowBefore = Date.now;
+  let now = 1789412000000;
+  Date.now = () => now;
+  const methods = { fillText: value => labels.push(value), createLinearGradient: () => ({ addColorStop() {} }) };
+  const ctx = new Proxy(methods, { get: (target, key) => target[key] || (() => {}) });
+  const canvas = { getContext: () => ctx, requestAnimationFrame: callback => queue.push(callback) };
   const on = name => callback => { events[name] = callback; };
-  function createSound() {
-    return {
-      paused: true,
-      playCount: 0,
-      play() { this.paused = false; this.playCount++; },
-      pause() { this.paused = true; },
-      stop() { this.paused = true; },
-      set src(file) {
-        const audio = fs.readFileSync(path.join(output, file));
-        assert.equal(audio.toString('ascii', 0, 4), 'RIFF');
-        assert.equal(audio.toString('ascii', 8, 12), 'WAVE');
-        sounds.set(path.basename(file, '.wav'), this);
-      },
-    };
-  }
+  const date = '2026-09-15';
+  let dailyElapsed = null;
+  let dailyCompletedAt = null;
   const api = {
     createCanvas: () => canvas,
-    loadFont(file) { fontLoaded = fs.existsSync(path.join(output, file)); return fontLoaded ? 'Jinyao UI' : ''; },
-    onTouchStart: on('start'), onTouchMove: on('move'), onTouchEnd: on('end'), onTouchCancel: on('cancel'),
+    getWindowInfo: () => ({ windowWidth: 390, windowHeight: 844, pixelRatio: 1 }),
     onShow: on('show'), onHide: on('hide'), onWindowResize: on('resize'),
-    getStorageSync: key => key === storeKey ? stored : key === dailyKey ? storedDaily :
-      key === modesKey ? storedModes : key === audioKey ? storedAudio : '',
-    setStorageSync(key, data) {
-      if (key === dailyKey) storedDaily = data;
-      else if (key === modesKey) storedModes = data;
-      else if (key === audioKey) storedAudio = data;
-      else { assert.equal(key, storeKey); stored = data; }
-    },
-    shareAppMessage(options) { share = options; },
-    createRewardedVideoAd({ adUnitId }) {
-      assert.equal(adUnitId, 'test-reward');
-      return {
-        load: () => Promise.resolve(),
-        show() { videoShown++; return Promise.resolve(); },
-        onClose(listener) { adClosed = listener; },
-        onError() {},
-      };
-    },
-    getFileSystemManager: () => ({
-      readFileSync(file, encoding) {
-        imageFallback++;
-        return fs.readFileSync(path.join(output, file), encoding);
-      },
+    getStorageSync: key => storage.get(key), setStorageSync: (key, value) => storage.set(key, value),
+    createImage: () => ({
+      width: 400, height: 450,
+      set src(value) { images.push(value); queueMicrotask(() => this.onload()); },
     }),
-    createImage() {
-      const listeners = {};
-      const img = { width: 800, height: 1761 };
-      if (platform === 'douyin') img.addEventListener = (name, listener) => { listeners[name] = listener; };
-      Object.defineProperty(img, 'src', { set(src) {
-        const isData = /^data:image\/(?:png|jpeg);base64,/.test(src);
-        if (isData) assert.ok(/^data:image\/(?:png;base64,iVBOR|jpeg;base64,\/9j\/)/.test(src));
-        const exists = isData || fs.existsSync(path.join(output, src));
-        const event = exists && (platform === 'wechat' || isData) ? 'load' : 'error';
-        queue.push(() => (listeners[event] || img['on' + event])());
-      } });
-      return img;
+    request({ url, data, method, success }) {
+      const target = new URL(url);
+      const p = target.pathname.replace('/api/v1', '');
+      requests.push([p, method]);
+      let response;
+      if (p === '/me/guest') {
+        assert.equal(data.source, source);
+        response = { id: 'tester', token: 'demo' };
+      } else if (p === '/me') response = { id: 'tester' };
+      else if (p === '/levels') response = catalog.map(({ id, category, atlas_version, level_number, name }) =>
+        ({ id, category, atlas_version, level_number, name }));
+      else if (p === '/me/campaign') response = { completed: [...completed] };
+      else if (p === '/me/campaign/levels/first/start') response = {
+        id: completed.has('first') ? 'first-replay' : 'first-attempt', atlas_version: 1,
+      };
+      else if (p === '/me/campaign/levels/second/start') response = { id: 'second-attempt', atlas_version: 1 };
+      else if (p === '/me/campaign/attempts/first-attempt/complete') {
+        assert.deepEqual(data.group.ids.slice().sort(), [0, 1, 2]);
+        assert.equal(data.elapsed_ms, 6300);
+        completed.add('first');
+        response = { elapsed_ms: data.elapsed_ms };
+      } else if (p === '/me/daily/start') response = {
+        date, level: catalog[0], completed: dailyElapsed !== null, elapsed_ms: dailyElapsed,
+        completed_at: dailyCompletedAt,
+      };
+      else if (p === '/me/daily/complete') {
+        dailyElapsed = data.elapsed_ms;
+        dailyCompletedAt = new Date(Date.now()).toISOString();
+        response = { date, elapsed_ms: dailyElapsed };
+      }
+      else if (p === '/me/collection') response = {
+        cost: 30, balance: 31, claims: [], awards: [{ month: '2026-08-01' }],
+        items: [{ date, elapsed_ms: 3200, completed_at: dailyCompletedAt, level_id: 'first', atlas_version: 1 }],
+      };
+      else if (p === '/me/collection/redemptions') {
+        assert.equal(data.reward_month, '2026-08');
+        response = { id: 'award', reward_month: '2026-08-01', status: 'pending' };
+      } else if (p === '/ranking') response = {
+        month: '2026-09', current_month: '2026-09', winner: null,
+        items: [{ nickname: '瓷友', rank: 1, category: 'normal', level_number: 6, elapsed_ms: 6300 }],
+      };
+      else if (p.startsWith('/levels/')) response = catalog.find(level => level.id === p.slice(8));
+      assert.ok(response, 'Unexpected request ' + p);
+      queueMicrotask(() => success({ statusCode: 200, data: response }));
     },
   };
-  if (platform === 'wechat') {
-    api.createInnerAudioContext = createSound;
-    api.getWindowInfo = systemInfo;
-    api.getMenuButtonBoundingClientRect = () => ({ bottom: info.menuBottom });
-  } else {
-    api.getAudioContext = () => ({
-      createAudio: createSound,
-      createMediaElementSource: () => ({ connect() {} }),
-    });
-    api.getSystemInfoSync = systemInfo;
-    api.getMenuButtonLayout = () => ({ top: 27, height: info.menuBottom - 27 });
-  }
-  function flush() {
-    for (let i = 0; queue.length && i < (openingFrames ? 8 : 100); i++) queue.shift()();
-    assert.ok(queue.length <= (openingFrames ? 1 : 0));
-  }
-  function screen(world) {
-    return [layout.field.x + world[0] * layout.scale, layout.field.y + world[1] * layout.scale];
-  }
-  function emit(stage, pos, identifier = 77) {
-    const fields = platform === 'wechat' ? { clientX: pos[0], clientY: pos[1] } : { screenX: pos[0], screenY: pos[1] };
-    events[stage]({ changedTouches: [Object.assign({ identifier }, fields)] });
-    flush();
-  }
-  function drag(a, b) {
-    emit('start', screen(a));
-    emit('move', screen(b), 88);
-    emit('move', screen(b));
-    emit('end', screen(b));
-  }
-  function tap(screenPoint) {
-    emit('start', screenPoint);
-    emit('end', screenPoint);
-  }
-  function tapLabel(label) {
-    const hit = labels.findLast(item => item.label === label);
-    assert.ok(hit, '找不到按钮：' + label);
-    labels = [];
-    tap([hit.x, hit.y]);
-  }
-  function state() { return JSON.parse(storedDaily).current.book.games[0]; }
-  function group(id) { return state().groups.find(g => g.ids.includes(id)); }
-  function center(id, pose = group(id)) {
-    const s = levels[0].shards[id];
-    return [pose.x + s.cx * SCALE, pose.y + s.cy * SCALE];
-  }
+  const app = start(createPlatform(api, 'https://example.test', 'test', source));
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const tick = (ms = 0) => {
+    now += ms;
+    labels.length = 0;
+    for (const callback of queue.splice(0)) callback();
+  };
 
-  const environment = platform === 'wechat' ? 'wx' : 'tt';
-  const realNow = Date.now;
-  let now = initialTime;
-  Date.now = () => now;
-  function openWithAnimation(label, inspect) {
-    openingFrames = true;
-    cropWidths.length = 0;
-    tapLabel(label);
-    assert.ok(cropWidths.length && cropWidths.every(width => width === 400));
-    assert.equal(queue.length, 1);
-    if (inspect) {
-      assert.equal(numberOutlines.length, 0);
-      cropWidths.length = 0;
-      now += 650;
-      flush();
-      assert.ok(cropWidths.length && cropWidths.every(width => width > 0 && width < 400));
-      assert.equal(numberOutlines.length, 0);
-      assert.ok(!labels.some(item => item.label === '找邻片'));
-    }
-    now += OPENING_DURATION;
-    openingFrames = false;
-    flush();
-  }
-  global[environment] = api;
-  const rewardConfig = require(path.join(output, 'platform', 'reward-config.js'));
-  const originalAdId = rewardConfig.adUnitId;
-  rewardConfig.adUnitId = 'test-reward';
   try {
-    require(path.join(output, 'game.js'));
-    flush();
-    assert.equal(canvas.width, 1170);
-    assert.ok(imagesDrawn > 0);
-    assert.ok(fontLoaded && ctx.font.includes('Jinyao UI'));
-    assert.equal(imageFallback, platform === 'wechat' ? 0 : 1);
-    assert.equal(sounds.size, 0);
-    tap([layout.x + layout.w - 21, layout.top + 21]);
-    const music = sounds.get('music-river');
-    assert.equal(music.loop, true);
-    assert.equal(music.volume, 0.45);
-    assert.equal(music.playCount, 1);
-    const modalWidth = Math.min(420, layout.w);
-    const modalLeft = (info.width - modalWidth) / 2;
-    const trackStart = modalLeft + 31, trackWidth = modalWidth - 105;
-    const trackY = (info.height - 270) / 2 + 118;
-    emit('start', [trackStart, trackY]);
-    emit('move', [trackStart + trackWidth * 0.8, trackY]);
-    emit('end', [trackStart + trackWidth * 0.8, trackY]);
-    assert.equal(music.volume, 0.8);
-    assert.equal(JSON.parse(storedAudio).music.volume, 80);
-    tapLabel('开启');
-    assert.equal(JSON.parse(storedAudio).effects.enabled, false);
-    tapLabel('开启');
-    assert.equal(music.paused, true);
-    const musicSwitch = labels.find(item => item.label === '关闭');
-    tap([musicSwitch.x, musicSwitch.y]);
-    assert.equal(music.paused, false);
-    tapLabel('关闭');
-    assert.equal(JSON.parse(storedAudio).effects.enabled, true);
-    assert.equal(sounds.get('sound-join').volume, 0.7);
-    tapLabel('完成');
-    tapLabel('分享');
-    assert.equal(share.title, '金缮夜馆');
-    tapLabel('排行榜');
-    assert.ok(labels.some(item => item.label === '本机 · 每日一瓷最快五次'));
-    tapLabel('挑战每日一瓷');
-    assert.ok(imagesDrawn > 0);
-    assert.equal(imageFallback, platform === 'wechat' ? 0 : 2);
-    const oldCampaign = stored;
-    const dailyGroup = { x: -25, y: 130, turn: 0 };
-    strokes.length = 0;
-    tap(screen(center(0)));
-    assert.ok(strokes.includes('#d8f1e5'));
-    const base = center(2);
-    drag(center(0), base);
-    assert.equal(state().groups.length, 3);
-    assert.ok(Math.hypot(center(0)[0] - base[0], center(0)[1] - base[1]) < 0.001);
-    drag(center(0), center(0, dailyGroup));
-    assert.ok(sounds.get('sound-join').playCount >= 2);
-    const start = center(0);
-    strokes.length = 0;
-    emit('start', screen(start));
-    assert.ok(strokes.filter(color => color === '#d8f1e5').length >= 4);
-    emit('move', screen([start[0] + 42, start[1] + 30]));
-    emit('cancel', screen(start));
-    assert.deepEqual(group(0).ids, [0, 1]);
-    tapLabel('‹ 首页');
-    now += 60000;
-    tapLabel('每日一瓷');
-    assert.deepEqual(JSON.parse(storedDaily).current.book.games[0].groups.at(-1).ids, [0, 1]);
-    now += 6000;
-    drag(center(2), center(2, dailyGroup));
-    assert.equal(sounds.get('sound-win').playCount, 1);
-    assert.equal(stored, oldCampaign);
-    assert.deepEqual(JSON.parse(storedDaily).records, [{ date: edition.date, index: 0, ms: 10000 }]);
-    tapLabel('分享成绩');
-    assert.match(share.title, /00:10/);
-    assert.match(share.desc, /00:10/);
-    tapLabel('留在桌面');
-    tapLabel('‹ 首页');
-    tapLabel('排行榜');
-    assert.ok(labels.some(item => item.label === '00:10'));
-    tapLabel('关闭');
-    arcs = 0;
-    numberOutlines.length = 0;
-    openWithAnimation('普通模式', true);
-    assert.equal(sounds.get('sound-break').playCount, 1);
-    const first = () => JSON.parse(storedModes).normal.games[0];
-    assert.equal(first().groups.length, 5);
-    for (const number of ['1', '2', '3', '4', '5']) assert.ok(labels.some(item => item.label === number));
-    assert.deepEqual([...new Set(numberOutlines)].sort(), ['1', '2', '3', '4', '5']);
-    assert.equal(arcs, 0);
-    strokes.length = 0;
-    tapLabel('找邻片');
-    assert.ok(strokes.filter(color => color === '#e8c784').length >= 2);
-    const original = first();
-    tapLabel('重排');
-    assert.notDeepEqual(first().groups, original.groups);
-    assert.equal(first().remaining, original.remaining);
-    tap([layout.x + layout.w / 2 - 15, layout.top + (layout.compact ? 15.5 : 20.5)]);
-    now += 45000;
-    tapLabel('完成');
-    assert.equal(first().remaining, original.remaining);
-    events.hide();
-    assert.equal(music.paused, true);
-    now += 300000;
-    events.show();
-    assert.equal(music.paused, false);
-    flush();
-    assert.ok(labels.some(item => item.label === '02:00'));
-    now += 120001;
-    emit('start', [10, 300]);
-    assert.ok(labels.some(item => item.label === '时间到'));
-    assert.equal(sounds.get('sound-timeout').playCount, 1);
-    assert.equal(first().remaining, 0);
-    const expiredGroups = first().groups;
-    tapLabel('看广告 +60 秒');
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(videoShown, 1);
-    adClosed({ isEnded: false });
-    await new Promise(resolve => setImmediate(resolve));
-    flush();
-    assert.equal(first().remaining, 0);
-    tapLabel('看广告 +60 秒');
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(videoShown, 2);
-    adClosed({ isEnded: true });
-    adClosed({ isEnded: true });
-    await new Promise(resolve => setImmediate(resolve));
-    flush();
-    assert.deepEqual(first().groups, expiredGroups);
-    assert.equal(first().remaining, 60000);
-    now += 60001;
-    emit('start', [10, 300]);
-    openWithAnimation('本关重开');
-    assert.equal(first().remaining, 120000);
-    tapLabel('‹ 首页');
-    openWithAnimation('困难模式');
-    assert.equal(JSON.parse(storedModes).hard.games[0].groups.length, 20);
-    tapLabel('‹ 首页');
-    openWithAnimation('极难模式');
-    assert.equal(JSON.parse(storedModes).extreme.games[0].groups.length, 34);
+    await flush();
+    tick();
+    assert.equal(requests.some(([p]) => p.startsWith('/levels/')), false);
+    assert.ok(labels.includes('普通模式'));
+    assert.ok(!labels.includes('线上关卡'));
+    app.action('settings');
+    tick();
+    assert.ok(labels.includes('声音设置'));
+    app.action('close');
+
+    app.action('mode-normal');
+    await flush();
+    tick();
+    assert.equal(app.puzzle.level.level_number, 5);
+    assert.ok(labels.includes('00:00'));
+    assert.ok(!app.hits.some(hit => hit.id === 'settings'));
+    assert.equal(app.puzzle.state.groups.filter(group => group.turn !== 0).length, 2);
+    assert.deepEqual(app.puzzle.state.numbers.slice().sort(), [1, 2, 3, 4]);
+    assert.ok(requests.some(([p]) => p === '/levels/second'), '玩当前关时已获取下一关配置');
+    assert.ok(images.some(value => value.includes('/levels/second/atlas.png')), '玩当前关时已加载下一关图集');
+    assert.ok(!requests.some(([p]) => p.includes('/levels/hard')));
+    const puzzle = app.puzzle;
+    const decoy = puzzle.state.groups.find(group => group.ids[0] === 3);
+    puzzle.select(decoy);
+    assert.equal(puzzle.canRotate, false);
+    assert.equal(puzzle.turnSelected(), false);
+    app.action('rearrange');
+    assert.equal(decoy.turn, 0);
+    tick(config.OPENING_DURATION + 5);
+    now += 6300;
+    const board = puzzle.state.groups;
+    for (const group of board) Object.assign(group, { x: 10, y: 10, turn: 0 });
+    assert.equal(puzzle.finishMove(decoy), false);
+    assert.equal(puzzle.finishMove(board.find(group => group !== decoy)), true);
+    app.afterJoin();
+    await flush();
+    tick();
+    assert.equal(app.elapsed(), 6300);
+    assert.equal(app.puzzle.phase, 'stored');
+    assert.ok(labels.includes('下一关'));
+    app.action('home');
+    app.action('mode-normal');
+    await flush();
+    assert.equal(app.puzzle.level.level_number, 5);
+    assert.equal(app.puzzle.phase, 'stored');
+    assert.equal(app.elapsed(), 6300);
+    assert.equal(requests.filter(([p]) => p === '/me/campaign/levels/first/start').length, 1);
+
+    const boardKey = app.campaignKey(app.puzzle.level);
+    app.action('home');
+    storage.delete(boardKey);
+    storage.delete(app.campaignPositionsKey());
+    await app.connect();
+    app.action('mode-normal');
+    await flush();
+    assert.equal(app.puzzle.phase, 'stored');
+    assert.equal(app.hasElapsedRecord, false);
+    assert.equal(requests.filter(([p]) => p === '/me/campaign/levels/first/start').length, 1);
+    app.action('confirm-reset');
+    await flush();
+    assert.equal(app.puzzle.phase, 'fit');
+    assert.equal(app.attempt, 'first-replay');
+    app.action('home');
+    app.action('mode-normal');
+    await flush();
+    assert.equal(app.puzzle.phase, 'fit', '主动重开后可继续重玩');
+    app.action('home');
+    storage.delete(boardKey);
+    app.action('mode-normal');
+    await flush();
+    assert.equal(app.puzzle.phase, 'stored');
+    app.action('next');
+    await flush();
+    tick();
+    assert.equal(app.puzzle.level.level_number, 6);
+    assert.equal(requests.filter(([p]) => p === '/levels/second').length, 1, '下一关利用预取缓存');
+    assert.equal(images.filter(value => value.includes('/levels/second/atlas.png')).length, 1);
+    app.action('home');
+
+    app.action('daily');
+    await flush();
+    tick();
+    assert.equal(app.screen, 'daily');
+    tick(config.OPENING_DURATION + 5);
+    now += 3200;
+    for (const group of app.puzzle.state.groups) Object.assign(group, { x: 10, y: 10, turn: 0 });
+    app.puzzle.finishMove(app.puzzle.state.groups.find(group => group.ids[0] < 3));
+    app.afterJoin();
+    app.save();
+    const daily = JSON.parse(storage.get('jinyao-daily-v1'));
+    assert.equal(daily.records[0].ms, 3200);
+    assert.equal(daily.records[0].completed_at, dailyCompletedAt);
+    app.action('home');
+    app.daily = null;
+    app.records = [];
+    app.action('daily');
+    await flush();
+    assert.equal(app.puzzle.phase, 'stored', '从每日挑战记录恢复整器');
+    assert.equal(app.elapsed(), 3200);
+    assert.equal(app.records[0].ms, 3200);
+    assert.equal(app.records[0].completed_at, dailyCompletedAt);
+    assert.equal(requests.filter(([p]) => p === '/me/daily/complete').length, 1);
+    app.action('collection');
+    await flush();
+    tick();
+    assert.ok(labels.includes('领取月榜冠军奖'));
+    const { formatLocalDateTime } = require(path.join(output, 'core/daily.js'));
+    assert.ok(labels.includes(formatLocalDateTime(dailyCompletedAt) + ' · 用时 00:03'));
+    app.action('redeem-award');
+    app.collection.form = { recipient: '测试', phone: '13800138000', address: '测试省测试街道 10 号' };
+    app.action('redeem-submit');
+    await flush();
+    assert.equal(app.collection.balance, 31, '月榜奖品不扣收藏兑换额度');
+    assert.equal(app.collection.awards.length, 0);
+    app.action('home');
+    app.action('ranking');
+    await flush();
+    tick();
+    assert.ok(labels.includes('闯关月榜'));
+    assert.ok(labels.includes('瓷友'));
+
+    const one = new Puzzle(app.online.toLevel(catalog[0]), null, () => 0.5);
+    const restored = new Puzzle(one.level, one.state, () => 0.7);
+    assert.equal(restored.newBoard, false);
+    assert.equal(restored.state.groups.length, 4);
+    assert.deepEqual(restored.state.numbers, one.state.numbers);
+    const masked = new Puzzle(app.online.toLevel(catalog[0]), null, () => 0.5);
+    masked.level.shards[0].contours = [
+      [130, 170, 182, 170, 182, 205, 130, 205],
+      [145, 180, 145, 190, 155, 190, 155, 180],
+    ];
+    const shard = { ids: [0], x: 200, y: 30, turn: 1 };
+    masked.state.groups = [shard];
+    const hit = (x, y) => masked.hit(shard.x - y * SCALE, shard.y + x * SCALE);
+    assert.equal(hit(140, 185), shard);
+    assert.equal(hit(150, 185), null, '透明孔不可选中');
+    assert.equal(hit(124, 176), null, '瓷器外侧透明区域不可选中');
   } finally {
-    rewardConfig.adUnitId = originalAdId;
-    Date.now = realNow;
-    delete global[environment];
+    app.pauseClock();
+    Date.now = nowBefore;
   }
 }
 
-assert.equal(dailyEdition(Date.UTC(2026, 0, 1, 15, 59), levels.length).date, '2026-01-01');
-assert.equal(dailyEdition(Date.UTC(2026, 0, 1, 16), levels.length).date, '2026-01-02');
-assert.deepEqual(new Puzzle(null, dailyRandom(9), 3).state, new Puzzle(null, dailyRandom(9), 3).state);
-const oldAssembled = { groups: [{ ids: [0, 1, 2], x: 45, y: 54, turn: 0 }], paint: [0] };
-const migrated = new Puzzle({ current: 0, wins: [], games: { 0: oldAssembled } });
-assert.equal(migrated.phase, 'stored');
-assert.equal(migrated.unlocked(1), true);
-assert.deepEqual(migrated.state.groups, oldAssembled.groups);
-assert.equal('paint' in migrated.state, false);
-const rotating = new Puzzle(null, dailyRandom(4), 2);
-const target = { ids: rotating.level.shards.slice(1).map((_, id) => id + 1), x: 30, y: 80, turn: 0 };
-const last = { ids: [0], turn: 3 };
-const oldBounds = groupBounds(rotating.level, last);
-const newBounds = groupBounds(rotating.level, { ...last, turn: 0 });
-last.x = target.x + (newBounds[0] + newBounds[2] - oldBounds[0] - oldBounds[2]) / 2;
-last.y = target.y + (newBounds[1] + newBounds[3] - oldBounds[1] - oldBounds[3]) / 2;
-rotating.state.groups = [last, target];
-rotating.select(last);
-assert.equal(rotating.turnSelected(), true);
-assert.equal(rotating.phase, 'stored');
-assert.deepEqual(rotating.book.wins, [2]);
-assert.deepEqual(Array.from({ length: 10 }, (_, i) => modeLevel('normal', i).realCount),
-  [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
-assert.equal(modes.hard.limit, 20);
-assert.equal(modeLevel('hard', 0).realCount, 20);
-for (const [name, mode] of Object.entries(modes)) {
-  for (let i = 0; i < Math.min(mode.limit, 120); i++) {
-    const level = modeLevel(name, i), reached = new Set([0]);
-    assert.ok(level.shards.every(shard => polygonContains(shard.poly, shard.cx, shard.cy)));
-    let previous;
-    do {
-      previous = reached.size;
-      for (const { ids: [a, b] } of level.seams) {
-        assert.ok(a < level.realCount && b < level.realCount);
-        if (reached.has(a) || reached.has(b)) { reached.add(a); reached.add(b); }
-      }
-    } while (reached.size > previous);
-    assert.equal(reached.size, level.realCount);
-  }
-}
-const extreme = new Puzzle(null, dailyRandom(4), undefined, 'extreme');
-const decoy = extreme.state.groups.find(group => group.ids[0] >= extreme.level.realCount);
-const staged = extreme.state.groups.map(group => Object.assign(group, { x: 40, y: 80, turn: 0 }));
-extreme.rearrange();
-assert.equal(extreme.state.groups.length, 34);
-for (const group of staged) Object.assign(group, { x: 40, y: 80, turn: 0 });
-assert.equal(extreme.finishMove(decoy), false);
-assert.equal(extreme.finishMove(staged.find(group => group !== decoy && group.ids[0] < extreme.level.realCount)), true);
-assert.equal(extreme.phase, 'stored');
-assert.equal(extreme.state.groups[0].ids.length, extreme.level.realCount);
-assert.equal(new Puzzle(extreme.book, null, undefined, 'extreme').phase, 'stored');
-assert.equal(modeLevel('extreme', 10000).realCount, 64);
-assert.deepEqual(levels.map(level => level.shards.length), [3, 5, 7, 9, 12, 16]);
-for (const level of levels) {
-  const isolated = level.shards.map((_, id) => id);
-  const group = { ids: [isolated.shift()], x: 71, y: 123, turn: 2 };
-  while (isolated.length) {
-    const adjacent = isolated.findIndex(id => areNeighbors(level, group, { ids: [id] }));
-    assert.ok(adjacent >= 0);
-    const other = { ids: [isolated.splice(adjacent, 1)[0]], x: 74, y: 121, turn: 0 };
-    const groups = [group, other];
-    assert.equal(matchNearby(level, groups, group), false);
-    other.turn = 2;
-    assert.equal(matchNearby(level, groups, group), true);
-    assert.equal(groups.length, 1);
-  }
-}
-async function checkPlatforms() {
-  for (const platform of ['wechat', 'douyin']) {
-    const output = path.join(root, 'dist', platform);
+async function main() {
+  for (const source of ['wechat', 'douyin']) {
+    const output = path.join(root, 'dist', source);
     verifyFiles(output);
-    await mockRuntime(output, platform);
-    console.log(platform + '：三种模式、倒计时、重排、重开、广告续时、每日挑战及声音设置通过本地检查');
+    await checkRuntime(output, source);
+    console.log(source + '：后端关卡、旋转与干扰片、正向计时、下一关预取、每日收藏和月榜通过本地检查');
   }
 }
 
-checkPlatforms().catch(error => {
+main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
