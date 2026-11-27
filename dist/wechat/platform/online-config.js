@@ -1,2 +1,2 @@
 'use strict';
-module.exports = {"env":"master","label":"线上环境","apiUrl":"http://139.196.161.33:8000"};
+module.exports = {"env":"dev","label":"开发环境","apiUrl":"http://127.0.0.1:8000"};

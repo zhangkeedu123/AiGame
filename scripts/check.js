@@ -109,7 +109,7 @@ async function checkRuntime(output, source) {
         completed.add('first');
         response = { elapsed_ms: data.elapsed_ms };
       } else if (p === '/me/daily/start') response = {
-        date, level: catalog[0], completed: dailyElapsed !== null, elapsed_ms: dailyElapsed,
+        date, level: { ...catalog[0], category: 'daily' }, completed: dailyElapsed !== null, elapsed_ms: dailyElapsed,
         completed_at: dailyCompletedAt,
       };
       else if (p === '/me/daily/complete') {
@@ -225,6 +225,7 @@ async function checkRuntime(output, source) {
     await flush();
     tick();
     assert.equal(app.screen, 'daily');
+    assert.equal(app.puzzle.level.category, 'daily');
     tick(config.OPENING_DURATION + 5);
     now += 3200;
     for (const group of app.puzzle.state.groups) Object.assign(group, { x: 10, y: 10, turn: 0 });

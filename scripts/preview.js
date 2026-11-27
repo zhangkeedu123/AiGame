@@ -151,8 +151,11 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   process.exitCode = 1;
 } else {
   server.on('error', error => {
-    if (error.code === 'EADDRINUSE') console.error('端口已占用。请试试 node scripts/preview.js 4174');
-    else console.error(error.message);
+    if (error.code === 'EADDRINUSE') {
+      const alternative = port < 65535 ? port + 1 : port - 1;
+      console.error('端口 ' + port + ' 已占用。若预览已在运行，请直接打开对应页面。');
+      console.error('需要另开预览时，可试试 node scripts/preview.js ' + alternative + ' --env ' + backend.name);
+    } else console.error(error.message);
     process.exitCode = 1;
   });
   server.listen(port, host, () => {

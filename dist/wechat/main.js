@@ -355,7 +355,7 @@ class Game {
     try {
       await this.online.ensurePlayer();
       const data = await this.online.request('/me/daily/start', { method: 'POST' });
-      if (!data.level) { this.setStatus('今日瓷器正在准备中，请稍后再来。'); return; }
+      if (!data.level) { this.setStatus('今日暂无上架的每日一瓷，请稍后再来。'); return; }
       if (this.screen !== 'home' || this.modal) return;
       this.edition = { date: data.date, level: this.online.toLevel(data.level), playerId: this.collection.playerId,
         completed: data.completed, elapsed: data.elapsed_ms, completedAt: data.completed_at };
